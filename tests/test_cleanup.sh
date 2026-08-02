@@ -7,7 +7,16 @@ s=s1; d="$T/results/$s/out"; printf ok | gzip > "$d/$s.round2.original_coords.cl
 awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s1"{$4="TRANSFERRED_FULL";$9="task1";$11="SUCCEEDED"}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"
 cat > "$T/mockbin/globus" <<'G'
 #!/usr/bin/env bash
-[[ "$1" == ls ]] && exit 0
+if [[ "$1" == ls ]]; then
+cat <<EOF
+alignment/s1.cram
+out/s1.round2.original_coords.clean.final.split.vcf.gz
+out/s1.round2.original_coords.per_base_coverage.tsv
+out/s1.numt_decoy.clean.realigned.per_base_coverage.tsv
+out/s1.round2.mtcn.tsv
+EOF
+exit 0
+fi
 exit 1
 G
 chmod +x "$T/mockbin/globus"; sed -i 's/ENABLE_LOCAL_CLEANUP=0/ENABLE_LOCAL_CLEANUP=1/' "$T/config.sh"

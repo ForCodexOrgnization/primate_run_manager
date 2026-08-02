@@ -13,7 +13,13 @@ while IFS=$'\t' read -r sample species hpc status job wave attempts error task w
  dir="${LOCAL_RESULTS}/${sample}"; cram="$dir/alignment/${sample}.cram"; crai="${cram}.crai"; [[ -s "$crai" ]] || crai="$dir/alignment/${sample}.crai"
  cram_ok=0; crai_ok=0; vcf_ok=0; cov2_ok=0; covn_ok=0; mtcn_ok=0; notes=()
  if [[ -s "$cram" ]]; then
-   if command -v samtools >/dev/null 2>&1; then samtools quickcheck -v "$cram" >/dev/null 2>&1 && { cram_ok=1; touch "${cram}.complete"; } || notes+=(invalid_cram); else cram_ok=1; fi
+   if command -v samtools >/dev/null 2>&1; then
+     samtools quickcheck -v "$cram" >/dev/null 2>&1 && { cram_ok=1; touch "${cram}.complete"; } || notes+=(invalid_cram)
+   elif [[ -f "${cram}.complete" ]]; then
+     cram_ok=1
+   else
+     notes+=(cram_unverified_no_samtools_or_marker)
+   fi
  else notes+=(missing_cram); fi
  [[ -s "$crai" ]] && crai_ok=1 || notes+=(missing_crai)
  vcf=$(find_exact_one "$dir" "${sample}.round2.original_coords.clean.final.split.vcf.gz"); cov2=$(find_exact_one "$dir" "${sample}.round2.original_coords.per_base_coverage.tsv"); covn=$(find_exact_one "$dir" "${sample}.numt_decoy.clean.realigned.per_base_coverage.tsv"); mtcn=$(find_exact_one "$dir" "${sample}.round2.mtcn.tsv")

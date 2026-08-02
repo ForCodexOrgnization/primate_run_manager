@@ -36,6 +36,29 @@ Globus transfers each complete sample directory recursively from `${SOURCE_ROOT}
 
 The complete directory remains on Workspace. Local retained files live under `ANALYSIS_ROOT/{vcf,round2_coverage,numt_decoy_coverage,mtcn,receipts}`. Cleanup uses temporary copies, byte comparisons, atomic renames, and a receipt before removing the original directory. Cleanup is disabled by default.
 
+At most `MAX_ACTIVE_TRANSFER_TASKS` Globus tasks are submitted concurrently, and
+the configured `GLOBUS_SYNC_LEVEL` is passed to the CLI. Cleanup requires the
+destination listing to contain the CRAM and all four core final outputs; a
+directory listing alone is not evidence of a complete transfer.
+
+## Deployment migration note
+
+Set `PIPELINE_CONFIG` to an absolute path and add these settings when migrating
+an existing config:
+
+```bash
+MAX_ACTIVE_TRANSFER_TASKS=2
+LOCAL_RESULTS_EXCLUDE_DIRS="numt_discovery numt_besthit logs lost+found"
+SOURCE_ROOT_LOCAL_VIEW="/local/POSIX/view/of/SOURCE_ROOT"
+```
+
+Run `bin/check_paths.sh CONFIG` before enabling transfers. It compares up to
+three recognized sample outputs by path, size, and SHA-256 checksum and fails
+instead of assuming that `LOCAL_RESULTS` and `SOURCE_ROOT_LOCAL_VIEW` are
+aliases. Historical import writes the auditable inventories
+`state/existing_local_samples.tsv` and
+`state/unrecognized_local_directories.tsv`; review the latter before proceeding.
+
 ## First Bouchet deployment
 
 Confirm collection-visible paths separately from job-visible POSIX paths, and start with:

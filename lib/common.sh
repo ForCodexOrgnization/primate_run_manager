@@ -27,14 +27,24 @@ validate_config() {
     local v
     [[ -x "$PIPELINE_LAUNCHER" ]] || die "PIPELINE_LAUNCHER missing or not executable: $PIPELINE_LAUNCHER"
     [[ -s "$ASSIGNED_SAMPLE_LIST" ]] || die "ASSIGNED_SAMPLE_LIST missing or empty: $ASSIGNED_SAMPLE_LIST"
-    for v in LOCAL_RESULTS ANALYSIS_ROOT PIPELINE_WORK_ROOT; do
+    for v in LOCAL_RESULTS ANALYSIS_ROOT PIPELINE_WORK_ROOT SOURCE_ROOT_LOCAL_VIEW; do
         [[ -n "${!v:-}" && "${!v}" != / ]] || die "$v must be non-empty and must not be /"
     done
     [[ "$LOCAL_RESULTS" != "$ANALYSIS_ROOT" ]] || die "LOCAL_RESULTS and ANALYSIS_ROOT must differ"
     [[ -n "${SOURCE_ROOT:-}" && -n "${DEST_ROOT:-}" ]] || die "SOURCE_ROOT and DEST_ROOT must be non-empty"
-    for v in PIPELINE_WAVE_SIZE PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN; do
+    for v in PIPELINE_WAVE_SIZE PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
+    for v in ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM; do
+        [[ "${!v}" == 0 || "${!v}" == 1 ]] || die "$v must be 0 or 1"
+    done
+    (( PATH_CHECK_MAX_FILES > 0 )) || die "PATH_CHECK_MAX_FILES must be greater than zero"
+    for v in STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT; do
+        (( ${!v} <= 100 )) || die "$v must be between 0 and 100"
+    done
+    (( STOP_SUBMIT_PERCENT <= FORCE_TRANSFER_PERCENT )) || die "STOP_SUBMIT_PERCENT must be <= FORCE_TRANSFER_PERCENT"
+    (( FORCE_TRANSFER_PERCENT <= EMERGENCY_PERCENT )) || die "FORCE_TRANSFER_PERCENT must be <= EMERGENCY_PERCENT"
+    case "${GLOBUS_SYNC_LEVEL:-}" in exists|size|mtime|checksum) ;; *) die "GLOBUS_SYNC_LEVEL must be one of: exists size mtime checksum" ;; esac
     if [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]]; then command -v sbatch >/dev/null || die "sbatch not found"; fi
     if [[ "$ENABLE_TRANSFER" == 1 ]]; then command -v globus >/dev/null || die "globus not found"; fi
 }
@@ -91,6 +101,17 @@ wave_is_active() { local w="$1"; awk -F '\t' -v w="$w" 'NR>1&&$1==w&&$9~/^(CREAT
 get_samples_by_status() { local regex="$1"; awk -F '\t' -v r="$regex" 'NR>1 && $4 ~ r {print $1}' "$STATUS_FILE"; }
 sample_species() { local sample="$1"; awk -F '\t' -v s="$sample" 'NR>1&&$1==s{print $2;exit}' "$STATUS_FILE"; }
 disk_used_percent() { df -P "$DISK_CHECK_PATH" | awk 'NR==2{gsub(/%/,"",$5);print $5}'; }
-local_sample_dir_count() { [[ -d "$LOCAL_RESULTS" ]] || { echo 0; return; }; find "$LOCAL_RESULTS" -mindepth 1 -maxdepth 1 -type d ! -name numt_discovery ! -name numt_besthit | wc -l | tr -d '[:space:]'; }
+local_sample_dir_count() {
+    [[ -d "$LOCAL_RESULTS" ]] || { echo 0; return; }
+    local dir name excluded count=0 exclusion
+    while IFS= read -r -d '' dir; do
+        name=${dir##*/}; excluded=0
+        for exclusion in ${LOCAL_RESULTS_EXCLUDE_DIRS:-}; do
+            [[ "$name" == "$exclusion" ]] && { excluded=1; break; }
+        done
+        (( excluded )) || count=$((count + 1))
+    done < <(find "$LOCAL_RESULTS" -mindepth 1 -maxdepth 1 -type d -print0)
+    echo "$count"
+}
 find_exact_one() { find "$1" -type f -name "$2" -print -quit 2>/dev/null || true; }
 require_nonempty() { [[ -n "${1:-}" && -s "$1" ]]; }

@@ -3,6 +3,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
 load_config "${1:-}"; ensure_state_files
 [[ "$ENABLE_TRANSFER" == 1 ]] || { log "ENABLE_TRANSFER=0"; exit 0; }
+if [[ "${PATH_CHECK_REQUIRED:-1}" == 1 && ! -f "$MANAGER_ROOT/state/path_check.passed" ]]; then
+    die "Transfer blocked: required path check marker is absent; run bin/check_paths.sh"
+fi
 [[ "$DRY_RUN" == 1 ]] || command -v globus >/dev/null || die "globus CLI not found"
 active_tasks=$(awk -F '\t' 'NR>1&&$3=="ACTIVE"{n++}END{print n+0}' "$TRANSFER_TASK_FILE")
 (( active_tasks < MAX_ACTIVE_TRANSFER_TASKS )) || { log "Maximum active Globus tasks reached ($active_tasks/$MAX_ACTIVE_TRANSFER_TASKS)"; exit 0; }

@@ -18,6 +18,7 @@ new_env; "$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null
 awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s1"{$4="READY_TO_TRANSFER"}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"
 printf 'old1\tt1\tACTIVE\ta\tn\tn\tn\nold2\tt2\tACTIVE\ta\tn\tn\tn\n' >> "$T/manager/state/transfer_tasks.tsv"
 sed -i 's/ENABLE_TRANSFER=0/ENABLE_TRANSFER=1/;s/DRY_RUN=0/DRY_RUN=1/;s/GLOBUS_SYNC_LEVEL=checksum/GLOBUS_SYNC_LEVEL=mtime/;s/TRANSFER_BATCH_SIZE=2/TRANSFER_BATCH_SIZE=1/' "$T/config.sh"
+touch "$T/manager/state/path_check.passed"
 out=$("$REPO/bin/submit_globus_batch.sh" "$T/config.sh" 2>&1); assert test "$(find "$T/manager/manifests/transfer_batches" -type f | wc -l)" -eq 0
 sed -i 's/MAX_ACTIVE_TRANSFER_TASKS=2/MAX_ACTIVE_TRANSFER_TASKS=3/' "$T/config.sh"; out=$("$REPO/bin/submit_globus_batch.sh" "$T/config.sh"); assert grep -q -- '--sync-level mtime' <<< "$out"
 

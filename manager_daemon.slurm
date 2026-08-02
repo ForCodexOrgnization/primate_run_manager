@@ -8,8 +8,10 @@
 
 set -euo pipefail
 CONFIG_FILE="${RUN_MANAGER_CONFIG:?Set RUN_MANAGER_CONFIG to an absolute config path}"
-MANAGER_ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPOSITORY_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1090
 source "$CONFIG_FILE"
+MANAGER_ROOT="${MANAGER_ROOT:-$REPOSITORY_ROOT}"
 mkdir -p "${MANAGER_ROOT}/logs"
 while true; do
     "${MANAGER_ROOT}/bin/manager_cycle.sh" "$CONFIG_FILE" || true

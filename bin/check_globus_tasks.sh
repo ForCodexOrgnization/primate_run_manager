@@ -1,29 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
-load_config "${1:-}"
-ensure_state_files
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
+load_config "${1:-}"; ensure_state_files
+[[ "$ENABLE_TRANSFER" == 1 ]] || exit 0
+[[ "$DRY_RUN" == 1 ]] && { log "DRY_RUN: not querying Globus tasks"; exit 0; }
 command -v globus >/dev/null || die "globus CLI not found"
-
-while IFS=$'\t' read -r batch_id task_id status sample_file submit_time last_update notes; do
-    [[ "$batch_id" == batch_id ]] && continue
-    [[ "$status" == ACTIVE ]] || continue
-    current=$(globus task show "$task_id" --format=UNIX --jmespath status 2>/dev/null || echo UNKNOWN)
-    case "$current" in
-        SUCCEEDED)
-            while IFS= read -r sample; do
-                with_state_lock update_sample_row "$sample" TRANSFERRED_FULL "" "" "$task_id" "${DEST_ROOT%/}/${sample}/" "Globus task succeeded"
-            done < "$sample_file"
-            new_status=SUCCEEDED ;;
-        FAILED|CANCELED|CANCELLED|EXPIRED)
-            while IFS= read -r sample; do
-                with_state_lock update_sample_row "$sample" TRANSFER_FAILED "" "" "$task_id" "" "Globus task $current"
-            done < "$sample_file"
-            new_status="$current" ;;
-        *) new_status=ACTIVE ;;
-    esac
-    tmp="${TRANSFER_TASK_FILE}.tmp.$$"
-    awk -F '\t' -v OFS='\t' -v b="$batch_id" -v s="$new_status" -v ts="$(now_iso)" 'NR==1{print;next} $1==b{$3=s;$6=ts} {print}' "$TRANSFER_TASK_FILE" > "$tmp"
-    mv "$tmp" "$TRANSFER_TASK_FILE"
-done < "$TRANSFER_TASK_FILE"
+mapfile -t rows < <(awk -F '\t' 'NR>1&&$3=="ACTIVE"{print $1"\t"$2"\t"$4}' "$TRANSFER_TASK_FILE")
+for row in "${rows[@]}"; do IFS=$'\t' read -r batch task samples <<< "$row"; current=$(globus task show "$task" --format=UNIX --jmespath status 2>/dev/null || echo UNKNOWN); new=ACTIVE
+ case "$current" in SUCCEEDED) new=SUCCEEDED;; FAILED|CANCELED|CANCELLED|EXPIRED) new="$current"; globus task event-list "$task" --filter-errors --limit 20 >&2 || true;; esac
+ [[ "$new" == ACTIVE ]] && continue
+ finish_task() { local tmp="${TRANSFER_TASK_FILE}.tmp.$$" s; awk -F '\t' -v OFS='\t' -v b="$batch" -v n="$new" -v t="$(now_iso)" 'NR==1{print;next}$1==b{$3=n;$6=t}{print}' "$TRANSFER_TASK_FILE" > "$tmp"; mv "$tmp" "$TRANSFER_TASK_FILE"; while read -r s; do if [[ "$new" == SUCCEEDED ]]; then update_sample_fields "$s" "status=TRANSFERRED_FULL" "globus_task_id=$task" "workspace_path=${DEST_ROOT%/}/$s/" "transfer_status=SUCCEEDED" "notes=Globus task succeeded"; else update_sample_fields "$s" "status=TRANSFER_FAILED" "globus_task_id=$task" "transfer_status=$new" "notes=Globus task $new"; fi; done < "$samples"; }
+ with_state_lock finish_task
+done

@@ -50,11 +50,17 @@ an existing config:
 MAX_ACTIVE_TRANSFER_TASKS=2
 LOCAL_RESULTS_EXCLUDE_DIRS="numt_discovery numt_besthit logs lost+found"
 SOURCE_ROOT_LOCAL_VIEW="/local/POSIX/view/of/SOURCE_ROOT"
+PATH_CHECK_REQUIRED=1
+PATH_CHECK_INCLUDE_CRAM=0
+PATH_CHECK_MAX_FILES=5
 ```
 
 Run `bin/check_paths.sh CONFIG` before enabling transfers. It compares up to
-three recognized sample outputs by path, size, and SHA-256 checksum and fails
-instead of assuming that `LOCAL_RESULTS` and `SOURCE_ROOT_LOCAL_VIEW` are
+`PATH_CHECK_MAX_FILES` recognized sample outputs by path, size, and SHA-256
+checksum, preferring final VCF, mtCN, and coverage files. CRAM comparison is
+disabled unless `PATH_CHECK_INCLUDE_CRAM=1`. A successful comparison writes the
+auditable `state/path_check.passed` marker required for transfer. The check
+fails instead of assuming that `LOCAL_RESULTS` and `SOURCE_ROOT_LOCAL_VIEW` are
 aliases. Historical import writes the auditable inventories
 `state/existing_local_samples.tsv` and
 `state/unrecognized_local_directories.tsv`; review the latter before proceeding.
@@ -70,6 +76,7 @@ CHAIN_CONCURRENT_BATCHES=1
 MAX_ACTIVE_PIPELINE_WAVES=1
 AUTO_RETRY_IMPORTED_INCOMPLETE=0
 TRANSFER_BATCH_SIZE=5
+ENABLE_PIPELINE_SUBMIT=0
 ENABLE_TRANSFER=0
 ENABLE_LOCAL_CLEANUP=0
 DRY_RUN=1

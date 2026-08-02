@@ -1,46 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
-load_config "${1:-}"
-ensure_state_files
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
+load_config "${1:-}"; ensure_state_files
 [[ "$ENABLE_LOCAL_CLEANUP" == 1 ]] || { log "ENABLE_LOCAL_CLEANUP=0; no local deletion"; exit 0; }
-
 mkdir -p "$ANALYSIS_ROOT"/{vcf,round2_coverage,numt_decoy_coverage,mtcn,receipts}
-
 cleanup_one() {
-    local sample="$1" dir="${LOCAL_RESULTS}/${sample}" vcf cov2 covn mtcn tbi="" receipt
-    [[ -d "$dir" ]] || { log "$sample local directory already absent"; return 0; }
-    vcf=$(find_exact_one "$dir" "${sample}.round2.original_coords.clean.final.split.vcf.gz")
-    cov2=$(find_exact_one "$dir" "${sample}.round2.original_coords.per_base_coverage.tsv")
-    covn=$(find_exact_one "$dir" "${sample}.numt_decoy.clean.realigned.per_base_coverage.tsv")
-    mtcn=$(find_exact_one "$dir" "${sample}.round2.mtcn.tsv")
-    require_nonempty "$vcf" || { log "$sample missing final VCF; not cleaning"; return 1; }
-    require_nonempty "$cov2" || { log "$sample missing round2 coverage; not cleaning"; return 1; }
-    require_nonempty "$covn" || { log "$sample missing NUMT coverage; not cleaning"; return 1; }
-    require_nonempty "$mtcn" || { log "$sample missing mtCN; not cleaning"; return 1; }
-    gzip -t "$vcf"
-    [[ -s "${vcf}.tbi" ]] && tbi="${vcf}.tbi"
-
-    cp -a "$vcf" "$ANALYSIS_ROOT/vcf/"
-    [[ -n "$tbi" ]] && cp -a "$tbi" "$ANALYSIS_ROOT/vcf/"
-    cp -a "$cov2" "$ANALYSIS_ROOT/round2_coverage/"
-    cp -a "$covn" "$ANALYSIS_ROOT/numt_decoy_coverage/"
-    cp -a "$mtcn" "$ANALYSIS_ROOT/mtcn/"
-
-    cmp -s "$vcf" "$ANALYSIS_ROOT/vcf/$(basename "$vcf")" || return 1
-    cmp -s "$cov2" "$ANALYSIS_ROOT/round2_coverage/$(basename "$cov2")" || return 1
-    cmp -s "$covn" "$ANALYSIS_ROOT/numt_decoy_coverage/$(basename "$covn")" || return 1
-    cmp -s "$mtcn" "$ANALYSIS_ROOT/mtcn/$(basename "$mtcn")" || return 1
-
-    receipt="$ANALYSIS_ROOT/receipts/${sample}.transferred.tsv"
-    printf 'sample_id\tglobus_task_id\tdestination\tcleanup_time\n%s\t%s\t%s\t%s\n' \
-        "$sample" "$(awk -F '\t' -v s="$sample" 'NR>1&&$1==s{print $7}' "$STATUS_FILE")" \
-        "${DEST_ROOT%/}/${sample}/" "$(now_iso)" > "$receipt"
-
-    rm -rf -- "$dir"
-    with_state_lock update_sample_row "$sample" LOCAL_FINAL_RETAINED "" "" "" "${DEST_ROOT%/}/${sample}/" "full Workspace copy retained; local final files retained under ANALYSIS_ROOT"
-    log "Cleaned local intermediates for $sample"
+ local sample="$1" dir task vcf cov2 covn mtcn tbi="" dest
+ dir="$LOCAL_RESULTS/$sample"
+ task=$(awk -F '\t' -v s="$sample" 'NR>1&&$1==s{print $9}' "$STATUS_FILE"); dest="${DEST_ROOT%/}/$sample/"
+ [[ -d "$dir" ]] || return 0
+ vcf=$(find_exact_one "$dir" "$sample.round2.original_coords.clean.final.split.vcf.gz"); cov2=$(find_exact_one "$dir" "$sample.round2.original_coords.per_base_coverage.tsv"); covn=$(find_exact_one "$dir" "$sample.numt_decoy.clean.realigned.per_base_coverage.tsv"); mtcn=$(find_exact_one "$dir" "$sample.round2.mtcn.tsv")
+ require_nonempty "$vcf" && gzip -t "$vcf" >/dev/null 2>&1 && require_nonempty "$cov2" && require_nonempty "$covn" && require_nonempty "$mtcn" || { log "$sample final validation failed; refusing cleanup"; return 1; }
+ [[ -s "${vcf}.tbi" ]] && tbi="${vcf}.tbi"
+ if [[ "$DRY_RUN" == 1 ]]; then printf 'DRY RUN: globus ls %q\n' "${DEST_COLLECTION}:${dest}"; printf 'DRY RUN: rm -rf -- %q\n' "$dir"; return 0; fi
+ command -v globus >/dev/null || die "globus CLI not found"; globus ls "${DEST_COLLECTION}:${dest}" >/dev/null || { log "$sample destination not verified"; return 1; }
+ local src target tmp; for pair in "$vcf:$ANALYSIS_ROOT/vcf" "$cov2:$ANALYSIS_ROOT/round2_coverage" "$covn:$ANALYSIS_ROOT/numt_decoy_coverage" "$mtcn:$ANALYSIS_ROOT/mtcn"; do src=${pair%%:*}; target=${pair#*:}/$(basename "$src"); tmp="${target}.tmp.$$"; cp -p "$src" "$tmp"; cmp -s "$src" "$tmp" || { rm -f "$tmp"; return 1; }; mv "$tmp" "$target"; done
+ if [[ -n "$tbi" ]]; then target="$ANALYSIS_ROOT/vcf/$(basename "$tbi")"; tmp="${target}.tmp.$$"; cp -p "$tbi" "$tmp"; cmp -s "$tbi" "$tmp" || { rm -f "$tmp"; return 1; }; mv "$tmp" "$target"; fi
+ receipt="$ANALYSIS_ROOT/receipts/$sample.transferred.tsv"; tmp="${receipt}.tmp.$$"; printf 'sample_id\tglobus_task_id\tdestination\tcleanup_time\n%s\t%s\t%s\t%s\n' "$sample" "$task" "$dest" "$(now_iso)" > "$tmp"; mv "$tmp" "$receipt"
+ rm -rf -- "$dir"; with_state_lock update_sample_fields "$sample" "status=LOCAL_FINAL_RETAINED" "cleanup_status=COMPLETE" "notes=Workspace full copy verified; local final files retained"
 }
-
-while IFS= read -r sample; do cleanup_one "$sample" || true; done < <(get_samples_by_status '^TRANSFERRED_FULL$')
+while read -r s; do cleanup_one "$s" || true; done < <(get_samples_by_status '^TRANSFERRED_FULL$')

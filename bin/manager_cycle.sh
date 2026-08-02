@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
-load_config "${1:-}"
-ensure_state_files
-exec 8>"${MANAGER_ROOT}/state/locks/manager_cycle.lock"
-flock -n 8 || { log "Another manager cycle is active; exiting"; exit 0; }
-
-"${SCRIPT_DIR}/scan_results.sh" "$1"
-"${SCRIPT_DIR}/check_globus_tasks.sh" "$1"
-"${SCRIPT_DIR}/cleanup_transferred_samples.sh" "$1"
-"${SCRIPT_DIR}/submit_globus_batch.sh" "$1"
-"${SCRIPT_DIR}/submit_next_batch.sh" "$1"
-
-used=$(disk_used_percent)
-log "Cycle complete: disk=${used}% local_sample_dirs=$(local_sample_dir_count)"
-awk -F '\t' 'NR>1{c[$4]++} END{for(k in c) print k"\t"c[k]}' "$STATUS_FILE" | sort >&2
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
+cfg="${1:-${RUN_MANAGER_CONFIG:-}}"; [[ -s "$cfg" ]] || die "Config missing"
+# Read only MANAGER_ROOT to locate the global lock, then perform normal loading/validation.
+MANAGER_ROOT=$(bash -c 'source "$1"; printf "%s" "$MANAGER_ROOT"' _ "$cfg")
+mkdir -p "$MANAGER_ROOT/state/locks"; exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8 || { log "Another manager cycle is active"; exit 0; }
+load_config "$cfg"; ensure_state_files; validate_config
+"${SCRIPT_DIR}/update_wave_states.sh" "$cfg"
+"${SCRIPT_DIR}/scan_results.sh" "$cfg"
+"${SCRIPT_DIR}/check_globus_tasks.sh" "$cfg"
+"${SCRIPT_DIR}/cleanup_transferred_samples.sh" "$cfg"
+"${SCRIPT_DIR}/submit_globus_batch.sh" "$cfg"
+"${SCRIPT_DIR}/submit_next_batch.sh" "$cfg"
+"${SCRIPT_DIR}/show_status.sh" "$cfg"

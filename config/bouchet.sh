@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 HPC_NAME="BOUCHET"
-MANAGER_ROOT="/home/lt692/ycga_work/primate_run_manager"
-PIPELINE_REPO="/home/lt692/ycga_work/primate_mt_variant_calling"
+MANAGER_ROOT="/nfs/roberts/project/pi_njl27/lt692/primate_run_manager"
+PIPELINE_REPO="/nfs/roberts/project/pi_njl27/lt692/primate_mt_variant_calling"
 PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_all_per_batch.sh"
-PIPELINE_CONFIG="${PIPELINE_REPO}/nextflow_mcc.config"
-ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/bouchet_samples.txt"
-LOCAL_RESULTS="/vast/palmer/scratch/lake_nicole/lt692/primate_results"
-ANALYSIS_ROOT="/vast/palmer/scratch/lake_nicole/lt692/primate_final_analysis"
-PIPELINE_WORK_ROOT="/home/lt692/ycga_work/nf_work_dir_all_per_batch"
+PIPELINE_CONFIG="${PIPELINE_REPO}/nextflow.config"
+ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/bouchet_sample_list_update.txt"
+LOCAL_RESULTS="/nfs/roberts/pi/pi_njl27/lt692/primate_results"
+ANALYSIS_ROOT="/nfs/roberts/pi/pi_njl27/lt692/primate_final_analysis"
+PIPELINE_WORK_ROOT="/nfs/roberts/scratch/pi_njl27/lt692/nf_work_dir_all_per_batch"
 # Conservative first-deployment values. Increase PIPELINE_WAVE_SIZE to 50 and
 # CHAIN_CONCURRENT_BATCHES to 3 after the initial test.
 PIPELINE_WAVE_SIZE=10
@@ -20,7 +20,7 @@ AUTO_RETRY_IMPORTED_INCOMPLETE=0
 CLEAN_ON_SUCCESS=1
 ENABLE_CHUNKED_ALIGNMENT=true
 ENABLE_PIPELINE_SUBMIT=0
-DISK_CHECK_PATH="/vast/palmer/scratch/lake_nicole/lt692"
+DISK_CHECK_PATH="/nfs/roberts/pi/pi_njl27/lt692"
 STOP_SUBMIT_PERCENT=70
 FORCE_TRANSFER_PERCENT=75
 EMERGENCY_PERCENT=85
@@ -41,5 +41,5 @@ ENABLE_TRANSFER=0
 ENABLE_LOCAL_CLEANUP=0
 DRY_RUN=1
 SAMTOOLS_MODULE="SAMtools/1.21-GCC-13.3.0"
-NEXTFLOW_MODULE="Nextflow/24.04.4"
+NEXTFLOW_MODULE="Nextflow/25.04.6"
 MANAGER_POLL_SECONDS=1800

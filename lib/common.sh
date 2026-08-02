@@ -32,7 +32,7 @@ validate_config() {
     done
     [[ "$LOCAL_RESULTS" != "$ANALYSIS_ROOT" ]] || die "LOCAL_RESULTS and ANALYSIS_ROOT must differ"
     [[ -n "${SOURCE_ROOT:-}" && -n "${DEST_ROOT:-}" ]] || die "SOURCE_ROOT and DEST_ROOT must be non-empty"
-    for v in PIPELINE_WAVE_SIZE PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES TRANSFER_BATCH_SIZE STOP_SUBMIT_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN; do
+    for v in PIPELINE_WAVE_SIZE PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE STOP_SUBMIT_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
     if [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]]; then command -v sbatch >/dev/null || die "sbatch not found"; fi
@@ -45,11 +45,18 @@ migrate_state_file() {
     [[ -e "$STATUS_FILE" ]] || { state_header > "$STATUS_FILE"; return; }
     local fields backup tmp
     fields=$(awk -F '\t' 'NR==1{print NF}' "$STATUS_FILE")
-    [[ "$fields" == 14 ]] && return
+    if [[ "$fields" == 14 ]]; then
+        if awk -F '\t' 'NR>1&&$4=="PIPELINE_INCOMPLETE"{found=1} END{exit !found}' "$STATUS_FILE"; then
+            backup="${STATUS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ).$$"; cp -p "$STATUS_FILE" "$backup"; tmp="${STATUS_FILE}.tmp.$$"
+            awk -F '\t' -v OFS='\t' 'NR>1&&$4=="PIPELINE_INCOMPLETE"{$4="PIPELINE_INCOMPLETE_REVIEW";$14=($14==""?"legacy incomplete requires review":$14"; legacy incomplete requires review")}{print}' "$STATUS_FILE" > "$tmp"
+            mv "$tmp" "$STATUS_FILE"; log "Conservatively migrated legacy incomplete states; backup: $backup"
+        fi
+        return
+    fi
     [[ "$fields" == 10 ]] || die "Unsupported sample state schema ($fields columns): $STATUS_FILE"
-    backup="${STATUS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ)"; cp -p "$STATUS_FILE" "$backup"
+    backup="${STATUS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ).$$"; cp -p "$STATUS_FILE" "$backup"
     tmp="${STATUS_FILE}.tmp.$$"
-    { state_header; awk -F '\t' -v OFS='\t' 'NR>1 { attempts=($4=="PENDING"?0:1); status=$4; if(status=="SUBMITTED")status="WAVE_SUBMITTED"; print $1,$2,$3,status,$5,$6,attempts,"",$7,$8,"","",$9,$10 }' "$STATUS_FILE"; } > "$tmp"
+    { state_header; awk -F '\t' -v OFS='\t' 'NR>1 { attempts=($4=="PENDING"?0:1); status=$4; if(status=="SUBMITTED")status="WAVE_SUBMITTED"; if(status=="PIPELINE_INCOMPLETE")status="PIPELINE_INCOMPLETE_REVIEW"; print $1,$2,$3,status,$5,$6,attempts,"",$7,$8,"","",$9,$10 }' "$STATUS_FILE"; } > "$tmp"
     mv "$tmp" "$STATUS_FILE"; log "Migrated state; backup: $backup"
 }
 
@@ -79,7 +86,7 @@ update_wave_row() {
     awk -F '\t' -v OFS='\t' -v w="$wave" -v spec="$spec" -v ts="$(now_iso)" 'BEGIN{n=split(spec,a,"\034");for(i=1;i<=n;i++){p=index(a[i],"=");if(p)v[substr(a[i],1,p-1)]=substr(a[i],p+1)}} NR==1{for(i=1;i<=NF;i++)h[$i]=i;print;next} $1==w{for(k in v)if(h[k])$h[k]=v[k];$h["last_update"]=ts}{print}' "$WAVE_STATUS_FILE" > "$tmp"; mv "$tmp" "$WAVE_STATUS_FILE"
 }
 active_wave_count() { awk -F '\t' 'NR>1 && $9 ~ /^(CREATED|SUBMITTED|RUNNING)$/ {n++} END{print n+0}' "$WAVE_STATUS_FILE"; }
-samples_in_wave() { local wave="${1:-}"; awk -F '\t' -v w="$wave" 'NR>1 && $6!="" && (w==""||$6==w) && $4 ~ /^(WAVE_SUBMITTED|PIPELINE_RUNNING)$/ {print $1}' "$STATUS_FILE"; }
+samples_in_wave() { local wave="${1:-}"; awk -F '\t' -v w="$wave" 'NR>1 && $6!="" && (w==""||$6==w) && $4 ~ /^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_RETRY_RUNNING)$/ {print $1}' "$STATUS_FILE"; }
 wave_is_active() { local w="$1"; awk -F '\t' -v w="$w" 'NR>1&&$1==w&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{ok=1} END{exit !ok}' "$WAVE_STATUS_FILE"; }
 get_samples_by_status() { local regex="$1"; awk -F '\t' -v r="$regex" 'NR>1 && $4 ~ r {print $1}' "$STATUS_FILE"; }
 sample_species() { local sample="$1"; awk -F '\t' -v s="$sample" 'NR>1&&$1==s{print $2;exit}' "$STATUS_FILE"; }

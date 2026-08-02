@@ -8,3 +8,7 @@ printf 'sample_id\tspecies\thpc\tstatus\tslurm_job_id\tpipeline_batch\tglobus_ta
 "$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null
 assert grep -q $'s1\tsp1\tTEST\tWAVE_SUBMITTED\t9\told\t1' "$T/manager/state/sample_status.tsv"
 assert test "$(find "$T/manager/state" -name 'sample_status.tsv.bak.*' | wc -l)" -eq 1
+# A deprecated ambiguous incomplete state is conservatively migrated to review.
+awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s1"{$4="PIPELINE_INCOMPLETE"}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"
+"$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null
+assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_INCOMPLETE_REVIEW"{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"

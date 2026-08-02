@@ -10,14 +10,14 @@ for entry in "${waves[@]}"; do
  [[ -n "$state" ]] || continue
  case "$state" in
   PENDING|CONFIGURING) with_state_lock update_wave_row "$wave" "slurm_state=$state" "status=SUBMITTED";;
-  RUNNING|COMPLETING) with_state_lock update_wave_row "$wave" "slurm_state=$state" "status=RUNNING"; while read -r s; do with_state_lock update_sample_fields "$s" "status=PIPELINE_RUNNING"; done < <(samples_in_wave "$wave");;
+  RUNNING|COMPLETING) with_state_lock update_wave_row "$wave" "slurm_state=$state" "status=RUNNING"; while read -r s; do current=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); [[ "$current" == WAVE_SUBMITTED ]] && with_state_lock update_sample_fields "$s" "status=PIPELINE_RUNNING"; done < <(samples_in_wave "$wave");;
   COMPLETED|FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL|DEADLINE)
     # Close the wave first, then let strict per-sample validation decide outcomes.
     terminal=COMPLETE; [[ "$state" == CANCELLED ]] && terminal=CANCELLED; [[ "$state" != COMPLETED && "$state" != CANCELLED ]] && terminal=FAILED
     with_state_lock update_wave_row "$wave" "slurm_state=$state" "status=$terminal"
     "${SCRIPT_DIR}/scan_results.sh" "$1"
     complete=0; incomplete=0
-    while read -r s; do st=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); if [[ "$st" == READY_TO_TRANSFER || "$st" == PIPELINE_COMPLETE ]]; then complete=$((complete+1)); else incomplete=$((incomplete+1)); with_state_lock update_sample_fields "$s" "status=PIPELINE_INCOMPLETE" "last_pipeline_error=$([[ "$state" == COMPLETED ]] && echo '' || echo "$state")" "notes=wave ended; per-sample outputs incomplete"; fi; done < <(awk -F '\t' -v w="$wave" 'NR>1&&$6==w{print $1}' "$STATUS_FILE")
+    while read -r s; do st=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); if [[ "$st" == READY_TO_TRANSFER || "$st" == PIPELINE_COMPLETE ]]; then complete=$((complete+1)); else incomplete=$((incomplete+1)); attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+0}' "$STATUS_FILE"); next=PIPELINE_FAILED; (( attempts < MAX_PIPELINE_RETRIES )) && next=PIPELINE_RETRY_READY; with_state_lock update_sample_fields "$s" "status=$next" "last_pipeline_error=$([[ "$state" == COMPLETED ]] && echo '' || echo "$state")" "notes=wave ended; per-sample outputs incomplete"; fi; done < <(awk -F '\t' -v w="$wave" 'NR>1&&$6==w{print $1}' "$STATUS_FILE")
     final=$terminal; ((complete>0&&incomplete>0)) && final=PARTIAL_COMPLETE; ((incomplete==0)) && final=COMPLETE
     with_state_lock update_wave_row "$wave" "complete_count=$complete" "incomplete_count=$incomplete" "status=$final";;
  esac

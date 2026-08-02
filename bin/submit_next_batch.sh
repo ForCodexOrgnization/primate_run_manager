@@ -9,7 +9,7 @@ load_config "${1:-}"; ensure_state_files; validate_config
 used=$(disk_used_percent); dirs=$(local_sample_dir_count)
 (( used < STOP_SUBMIT_PERCENT )) || { log "Disk ${used}% >= ${STOP_SUBMIT_PERCENT}%"; exit 0; }
 (( dirs < MAX_LOCAL_SAMPLE_DIRS )) || { log "Local sample dirs ${dirs} >= ${MAX_LOCAL_SAMPLE_DIRS}"; exit 0; }
-mapfile -t samples < <(awk -F '\t' -v max="$MAX_PIPELINE_RETRIES" 'NR>1 && ($4=="PENDING" || (($4=="PIPELINE_INCOMPLETE"||$4=="PIPELINE_FAILED") && $7<max)) {print $1}' "$STATUS_FILE" | head -n "$PIPELINE_WAVE_SIZE")
+mapfile -t samples < <(awk -F '\t' -v max="$MAX_PIPELINE_RETRIES" 'NR>1 && ($4=="PENDING" || ($4=="PIPELINE_RETRY_READY" && $7<max)) {print $1}' "$STATUS_FILE" | head -n "$PIPELINE_WAVE_SIZE")
 ((${#samples[@]})) || { log "No eligible samples"; exit 0; }
 seq_file="${MANAGER_ROOT}/state/wave_sequence"; exec 7>"${MANAGER_ROOT}/state/locks/wave_id.lock"; flock -x 7
 seq=0; [[ -s "$seq_file" ]] && read -r seq < "$seq_file"; seq=$((seq+1)); printf '%s\n' "$seq" > "${seq_file}.tmp.$$"; mv "${seq_file}.tmp.$$" "$seq_file"; flock -u 7
@@ -34,8 +34,8 @@ if ((rc!=0)) || [[ -z "$job_id" ]]; then
 fi
 finalize_wave() {
     update_wave_row "$wave_id" "pipeline_job_id=$job_id" "status=SUBMITTED" "slurm_state=PENDING" "notes=submitted"
-    local s attempts
-    for s in "${samples[@]}"; do attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=WAVE_SUBMITTED" "slurm_job_id=$job_id" "wave_id=$wave_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=manager wave submitted"; done
+    local s attempts previous next_status
+    for s in "${samples[@]}"; do previous=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); next_status=WAVE_SUBMITTED; [[ "$previous" == PIPELINE_RETRY_READY ]] && next_status=PIPELINE_RETRY_RUNNING; attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=$next_status" "slurm_job_id=$job_id" "wave_id=$wave_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=manager wave submitted"; done
 }
 with_state_lock finalize_wave
 log "Submitted wave $wave_id (${#samples[@]} samples) as Slurm job $job_id"

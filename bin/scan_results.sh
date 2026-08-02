@@ -24,8 +24,8 @@ while IFS=$'\t' read -r sample species hpc status job wave attempts error task w
  overall=0; ((cram_ok&&crai_ok&&vcf_ok&&cov2_ok&&covn_ok&&mtcn_ok)) && overall=1
  note=$(IFS=';'; echo "${notes[*]:-validated}"); row="$sample\t$cram_ok\t$crai_ok\t$vcf_ok\t$cov2_ok\t$covn_ok\t$mtcn_ok\t$overall\t$(now_iso)\t$note"; with_state_lock upsert_validation "$row"
  if ((overall)); then
-   case "$status" in PENDING|WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_INCOMPLETE|PIPELINE_FAILED|TRANSFER_FAILED) with_state_lock update_sample_fields "$sample" "status=READY_TO_TRANSFER" "transfer_status=READY" "notes=all required outputs validated";; esac
- elif [[ "$status" =~ ^(WAVE_SUBMITTED|PIPELINE_RUNNING)$ ]] && ! wave_is_active "$wave"; then
-   with_state_lock update_sample_fields "$sample" "status=PIPELINE_INCOMPLETE" "notes=$note"
- elif [[ "$status" =~ ^(PENDING|PIPELINE_INCOMPLETE|PIPELINE_FAILED)$ && -d "$dir" ]]; then with_state_lock update_sample_fields "$sample" "notes=$note"; fi
+   case "$status" in PENDING|WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_INCOMPLETE_REVIEW|PIPELINE_RETRY_READY|PIPELINE_RETRY_RUNNING|PIPELINE_FAILED|TRANSFER_FAILED) with_state_lock update_sample_fields "$sample" "status=READY_TO_TRANSFER" "transfer_status=READY" "notes=all required outputs validated";; esac
+ elif [[ "$status" =~ ^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_RETRY_RUNNING)$ ]] && ! wave_is_active "$wave"; then
+   with_state_lock update_sample_fields "$sample" "notes=$note"
+ elif [[ "$status" =~ ^(PENDING|PIPELINE_INCOMPLETE_REVIEW|PIPELINE_RETRY_READY|PIPELINE_FAILED)$ && -d "$dir" ]]; then with_state_lock update_sample_fields "$sample" "notes=$note"; fi
 done < "$STATUS_FILE"

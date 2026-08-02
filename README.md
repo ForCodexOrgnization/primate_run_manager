@@ -13,13 +13,17 @@ manager wave (up to PIPELINE_WAVE_SIZE samples)
 
 A **manager wave** is selected and tracked by this repository. A **pipeline batch** is created internally by the pipeline launcher. For example, a 50-sample wave and batch size 5 results in one launcher invocation that creates ten internal batches—not ten manager invocations. Every wave has its own manifest, Nextflow work directory, batch-list directory, and Slurm array job ID.
 
-Sample states are `PENDING`, `WAVE_SUBMITTED`, `PIPELINE_RUNNING`, `PIPELINE_COMPLETE`, `PIPELINE_INCOMPLETE`, `PIPELINE_FAILED`, `READY_TO_TRANSFER`, `TRANSFERRING`, `TRANSFERRED_FULL`, `TRANSFER_FAILED`, and `LOCAL_FINAL_RETAINED`. Failed waves never blanket-fail their samples; strict output scanning evaluates each sample independently.
+Sample states are `PENDING`, `WAVE_SUBMITTED`, `PIPELINE_RUNNING`, `PIPELINE_COMPLETE`, `PIPELINE_INCOMPLETE_REVIEW`, `PIPELINE_RETRY_READY`, `PIPELINE_RETRY_RUNNING`, `PIPELINE_FAILED`, `READY_TO_TRANSFER`, `TRANSFERRING`, `TRANSFERRED_FULL`, `TRANSFER_FAILED`, and `LOCAL_FINAL_RETAINED`. Failed waves never blanket-fail their samples; strict output scanning evaluates each sample independently. Historical incomplete imports enter `PIPELINE_INCOMPLETE_REVIEW` and are never retried without explicit approval (unless `AUTO_RETRY_IMPORTED_INCOMPLETE=1` is deliberately configured). Newly incomplete wave samples enter `PIPELINE_RETRY_READY` while attempts remain, then `PIPELINE_FAILED` at the retry limit.
 
 ## State and migration
 
 `bin/initialize_samples.sh` is idempotent: existing rows remain, new assigned samples are appended, and samples are not duplicated. On first use, an old 10-column `state/sample_status.tsv` is copied to a timestamped `sample_status.tsv.bak.*` and atomically migrated to the 14-column schema. Wave state is in `state/wave_status.tsv`; validation details are in `state/output_validation.tsv`.
 
 All state updates use a lock, temporary output, and atomic rename. Do not edit state while the manager is running.
+
+## Conservative incomplete-sample workflow
+
+Import historical directories with `bin/import_existing_results.sh CONFIG`. Complete samples become transfer-ready, while incomplete samples default to `PIPELINE_INCOMPLETE_REVIEW`. Review `state/pipeline_incomplete_report.tsv`, place approved sample IDs (one per line) in a file, and run `bin/approve_retry_samples.sh CONFIG sample_ids.txt`. Approval changes only manager state to `PIPELINE_RETRY_READY`; it never deletes or changes pipeline output. A retry receives a new manager-wave work directory while the all-per-batch launcher reuses valid existing stages through its skip/resume behavior. Generate a fresh report at any time with `bin/report_incomplete_samples.sh CONFIG`.
 
 ## Workspace transfer and local retention
 
@@ -41,6 +45,7 @@ PIPELINE_WAVE_SIZE=10
 PIPELINE_BATCH_SIZE=5
 CHAIN_CONCURRENT_BATCHES=1
 MAX_ACTIVE_PIPELINE_WAVES=1
+AUTO_RETRY_IMPORTED_INCOMPLETE=0
 TRANSFER_BATCH_SIZE=5
 ENABLE_TRANSFER=0
 ENABLE_LOCAL_CLEANUP=0

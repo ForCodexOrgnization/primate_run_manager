@@ -8,10 +8,13 @@
 
 set -euo pipefail
 CONFIG_FILE="${1:?Usage: sbatch run_import_existing.slurm CONFIG}"
-REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ "$CONFIG_FILE" = /* ]] || CONFIG_FILE="${SLURM_SUBMIT_DIR:-$PWD}/$CONFIG_FILE"
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
+REPOSITORY_ROOT="$MANAGER_ROOT"
+[[ -d "$REPOSITORY_ROOT/bin" ]] || { printf 'ERROR: Manager bin directory does not exist: %s\n' "$REPOSITORY_ROOT/bin" >&2; exit 1; }
+[[ -x "$REPOSITORY_ROOT/bin/initialize_samples.sh" ]] || { printf 'ERROR: Manager script is not executable: %s\n' "$REPOSITORY_ROOT/bin/initialize_samples.sh" >&2; exit 1; }
+[[ -x "$REPOSITORY_ROOT/bin/import_existing_results.sh" ]] || { printf 'ERROR: Manager script is not executable: %s\n' "$REPOSITORY_ROOT/bin/import_existing_results.sh" >&2; exit 1; }
 mkdir -p "${RUNTIME_LOG_DIR:-${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}/logs}"
 if command -v module >/dev/null 2>&1 && [[ -n "${SAMTOOLS_MODULE:-}" ]]; then
     module load "$SAMTOOLS_MODULE"

@@ -7,5 +7,7 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 load_config "${1:-}"
 load_globus_module
 printf 'Globus executable: %s\n' "$(command -v globus)"
-globus --version
+if ! globus version; then
+    die "Globus CLI version check failed: 'globus version' returned an error."
+fi
 globus whoami

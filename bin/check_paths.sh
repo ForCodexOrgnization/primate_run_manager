@@ -22,11 +22,23 @@ patterns=(
 [[ "$PATH_CHECK_INCLUDE_CRAM" == 1 ]] && patterns+=('*.cram')
 
 if [[ "$local_results_realpath" == "$source_view_realpath" ]]; then
-  for pattern in "${patterns[@]}"; do
-    while IFS= read -r -d '' local_file; do
+  sample_candidates=()
+  if [[ -s "${STATUS_FILE:-}" ]]; then
+    mapfile -t sample_candidates < <(get_samples_by_status '^READY_TO_TRANSFER$')
+  fi
+  if ((${#sample_candidates[@]} == 0)); then
+    while IFS=$'\t' read -r sample _; do
+      [[ -n "$sample" && "$sample" != sample_id && -d "$LOCAL_RESULTS/$sample" ]] && sample_candidates+=("$sample")
+    done < "$ASSIGNED_SAMPLE_LIST"
+  fi
+  for sample in "${sample_candidates[@]}"; do
+    [[ -d "$LOCAL_RESULTS/$sample" ]] || continue
+    for pattern in "${patterns[@]}"; do
+      local_file=$(find "$LOCAL_RESULTS/$sample" -type f -name "$pattern" -print -quit)
+      [[ -n "$local_file" ]] || continue
       checked_files+=("${local_file#"$LOCAL_RESULTS"/}")
       checked=$((checked+1)); (( checked >= PATH_CHECK_MAX_FILES )) && break 2
-    done < <(find "$LOCAL_RESULTS" -type f -name "$pattern" -print0 | sort -z)
+    done
   done
   (( checked > 0 )) || die "No recognized sample files available in shared deployment path: $local_results_realpath"
   tmp="${marker}.tmp.$$"

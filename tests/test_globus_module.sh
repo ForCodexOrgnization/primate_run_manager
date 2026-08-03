@@ -48,4 +48,40 @@ fi
 assert grep -q 'Globus CLI not found' <<< "$output"
 
 assert grep -qx 'GLOBUS_MODULE="Globus-CLI/3.34.0-GCCcore-13.3.0"' "$REPO/config/bouchet.sh"
+
+# The Globus diagnostic uses the CLI 3.x version subcommand, then checks identity.
+assert grep -Eq '^[[:space:]]*(if ! )?globus version;? then$' "$REPO/bin/check_globus.sh"
+legacy_version='globus -''-version'
+assert bash -c '! grep -Fq -- "$1" "$2/bin/check_globus.sh"' _ "$legacy_version" "$REPO"
+
+new_env
+cat > "$T/mockbin/globus" <<'GLOBUS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GLOBUS_CALLS"
+case "$1" in
+    version)
+        [[ "${GLOBUS_VERSION_FAIL:-0}" == 0 ]] || exit 42
+        echo 'Globus CLI 3.34.0'
+        ;;
+    whoami) echo 'test@example.org' ;;
+    *) exit 2 ;;
+esac
+GLOBUS
+chmod +x "$T/mockbin/globus"
+
+output=$(GLOBUS_CALLS="$T/globus-calls" \
+    "$REPO/bin/check_globus.sh" "$T/config.sh")
+assert grep -q 'Globus CLI 3.34.0' <<< "$output"
+assert grep -q 'test@example.org' <<< "$output"
+assert test "$(sed -n '1p' "$T/globus-calls")" = version
+assert test "$(sed -n '2p' "$T/globus-calls")" = whoami
+
+: > "$T/globus-calls"
+if output=$(GLOBUS_CALLS="$T/globus-calls" GLOBUS_VERSION_FAIL=1 \
+    "$REPO/bin/check_globus.sh" "$T/config.sh" 2>&1); then
+    echo 'failed Globus version check unexpectedly succeeded' >&2; exit 1
+fi
+assert grep -q "ERROR: Globus CLI version check failed: 'globus version' returned an error." <<< "$output"
+assert grep -qx version "$T/globus-calls"
+
 echo 'Globus module tests passed.'

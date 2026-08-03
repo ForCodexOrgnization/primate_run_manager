@@ -8,7 +8,7 @@ die() { log "ERROR: $*"; exit 1; }
 state_header() { printf 'sample_id\tspecies\thpc\tstatus\tslurm_job_id\twave_id\tpipeline_attempts\tlast_pipeline_error\tglobus_task_id\tworkspace_path\ttransfer_status\tcleanup_status\tlast_update\tnotes\n'; }
 wave_header() { printf 'wave_id\tsample_manifest\tsample_count\tpipeline_job_id\tsubmit_time\tslurm_state\tcomplete_count\tincomplete_count\tstatus\tlast_update\tnotes\n'; }
 transfer_header() { printf 'batch_id\ttask_id\tstatus\tsample_file\tsubmit_time\tlast_update\tnotes\n'; }
-validation_header() { printf 'sample_id\tcram_ok\tcrai_ok\tvcf_ok\tround2_coverage_ok\tnumt_coverage_ok\tmtcn_ok\toverall_complete\tscan_time\tnotes\n'; }
+validation_header() { printf 'sample_id\tcram_ok\tcrai_ok\tvcf_ok\tround2_coverage_ok\tnumt_coverage_ok\tmtcn_ok\toverall_complete\tscan_time\tnotes\tcram_size\tcram_mtime\tcrai_size\tcrai_mtime\tvcf_size\tvcf_mtime\tround2_coverage_size\tround2_coverage_mtime\tnumt_coverage_size\tnumt_coverage_mtime\tmtcn_size\tmtcn_mtime\n'; }
 
 load_config() {
     local cfg="${1:-${RUN_MANAGER_CONFIG:-}}"
@@ -16,11 +16,16 @@ load_config() {
     # shellcheck disable=SC1090
     source "$cfg"
     : "${MANAGER_ROOT:?}" "${HPC_NAME:?}" "${ASSIGNED_SAMPLE_LIST:?}"
+    : "${REQUIRE_SLURM_FOR_EXISTING_IMPORT:=1}"
+    : "${ALLOW_INTERACTIVE_IMPORT:=0}"
+    : "${SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS:=600}"
     STATUS_FILE="${MANAGER_ROOT}/state/sample_status.tsv"
     WAVE_STATUS_FILE="${MANAGER_ROOT}/state/wave_status.tsv"
     TRANSFER_TASK_FILE="${MANAGER_ROOT}/state/transfer_tasks.tsv"
     VALIDATION_FILE="${MANAGER_ROOT}/state/output_validation.tsv"
-    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/receipts,manifests/pipeline_waves,manifests/transfer_batches,logs,samples}
+    MANAGER_RUNTIME_ROOT="${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}"
+    RUNTIME_LOG_DIR="${RUNTIME_LOG_DIR:-${MANAGER_RUNTIME_ROOT}/logs}"
+    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/receipts,manifests/pipeline_waves,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
 }
 
 validate_config() {
@@ -34,6 +39,12 @@ validate_config() {
     [[ -n "${SOURCE_ROOT:-}" && -n "${DEST_ROOT:-}" ]] || die "SOURCE_ROOT and DEST_ROOT must be non-empty"
     for v in PIPELINE_WAVE_SIZE PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
+    done
+    for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS; do
+        [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
+    done
+    for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT; do
+        [[ "${!v}" == 0 || "${!v}" == 1 ]] || die "$v must be 0 or 1"
     done
     for v in ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM; do
         [[ "${!v}" == 0 || "${!v}" == 1 ]] || die "$v must be 0 or 1"
@@ -74,7 +85,13 @@ ensure_wave_state_file() { [[ -e "$WAVE_STATUS_FILE" ]] || wave_header > "$WAVE_
 ensure_state_files() {
     with_state_lock migrate_state_file
     [[ -e "$TRANSFER_TASK_FILE" ]] || transfer_header > "$TRANSFER_TASK_FILE"
-    [[ -e "$VALIDATION_FILE" ]] || validation_header > "$VALIDATION_FILE"
+    if [[ ! -e "$VALIDATION_FILE" ]]; then
+        validation_header > "$VALIDATION_FILE"
+    elif [[ $(awk -F '\t' 'NR==1{print NF}' "$VALIDATION_FILE") -lt 22 ]]; then
+        local validation_tmp="${VALIDATION_FILE}.tmp.$$"
+        { validation_header; awk -F '\t' 'NR>1' "$VALIDATION_FILE"; } > "$validation_tmp"
+        mv "$validation_tmp" "$VALIDATION_FILE"
+    fi
     ensure_wave_state_file
 }
 

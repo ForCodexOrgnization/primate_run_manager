@@ -2,7 +2,19 @@
 # Register results that predate manager-controlled waves without scheduling retries.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
-load_config "${1:-}"; ensure_state_files; validate_config
+interactive_override_set=${ALLOW_INTERACTIVE_IMPORT+x}; interactive_override=${ALLOW_INTERACTIVE_IMPORT:-0}
+load_config "${1:-}"
+[[ "$interactive_override_set" == x ]] && ALLOW_INTERACTIVE_IMPORT="$interactive_override"
+: "${REQUIRE_SLURM_FOR_EXISTING_IMPORT:=1}" "${ALLOW_INTERACTIVE_IMPORT:=0}"
+if [[ "$REQUIRE_SLURM_FOR_EXISTING_IMPORT" == 1 && -z "${SLURM_JOB_ID:-}" && "$ALLOW_INTERACTIVE_IMPORT" != 1 ]]; then
+    cat >&2 <<'EOF'
+Historical import performs CRAM validation and must run through Slurm.
+Use:
+bin/submit_import_existing.sh CONFIG
+EOF
+    exit 1
+fi
+ensure_state_files; validate_config
 "${SCRIPT_DIR}/initialize_samples.sh" "$1"
 # Inventory first-level directories before validation.  Keep recognized and
 # unrecognized names visible for audit rather than inferring samples from files.

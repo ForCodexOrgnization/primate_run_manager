@@ -23,7 +23,7 @@ All state updates use a lock, temporary output, and atomic rename. Do not edit s
 
 ## Conservative incomplete-sample workflow
 
-Import historical directories with `bin/import_existing_results.sh CONFIG`. Complete samples become transfer-ready, while incomplete samples default to `PIPELINE_INCOMPLETE_REVIEW`. Review `state/pipeline_incomplete_report.tsv`, place approved sample IDs (one per line) in a file, and run `bin/approve_retry_samples.sh CONFIG sample_ids.txt`. Approval changes only manager state to `PIPELINE_RETRY_READY`; it never deletes or changes pipeline output. A retry receives a new manager-wave work directory while the all-per-batch launcher reuses valid existing stages through its skip/resume behavior. Generate a fresh report at any time with `bin/report_incomplete_samples.sh CONFIG`.
+Import historical directories through Slurm with `bin/submit_import_existing.sh CONFIG`; do not run `bin/import_existing_results.sh` on a login node. Complete samples become transfer-ready, while incomplete samples default to `PIPELINE_INCOMPLETE_REVIEW`. The import job logs each sample before and after validation, applies the configured timeout to `samtools quickcheck`, and reuses successful validation rows when all required output sizes and modification times are unchanged. Review `state/pipeline_incomplete_report.tsv`, place approved sample IDs (one per line) in a file, and run `bin/approve_retry_samples.sh CONFIG sample_ids.txt`. Approval changes only manager state to `PIPELINE_RETRY_READY`; it never deletes or changes pipeline output. A retry receives a new manager-wave work directory while the all-per-batch launcher reuses valid existing stages through its skip/resume behavior. Generate a fresh report at any time with `bin/report_incomplete_samples.sh CONFIG`.
 
 ## Workspace transfer and local retention
 
@@ -53,6 +53,9 @@ SOURCE_ROOT_LOCAL_VIEW="/local/POSIX/view/of/SOURCE_ROOT"
 PATH_CHECK_REQUIRED=1
 PATH_CHECK_INCLUDE_CRAM=0
 PATH_CHECK_MAX_FILES=5
+REQUIRE_SLURM_FOR_EXISTING_IMPORT=1
+ALLOW_INTERACTIVE_IMPORT=0
+SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS=600
 ```
 
 Run `bin/check_paths.sh CONFIG` before enabling transfers. It compares up to
@@ -82,27 +85,42 @@ ENABLE_LOCAL_CLEANUP=0
 DRY_RUN=1
 ```
 
-Then follow this sequence:
+First initialize and inventory the historical results. Initialization is intentionally safe to run on the login node; CRAM validation is submitted to Slurm:
 
-1. Initialize samples: `bin/initialize_samples.sh config/bouchet.sh`.
-2. Run one dry cycle: `bin/manager_cycle.sh config/bouchet.sh`.
-3. Inspect `manifests/pipeline_waves/*.samples.tsv`, the printed launcher command, and `bin/show_status.sh config/bouchet.sh`.
-4. Set `DRY_RUN=0` while leaving transfer and cleanup disabled.
-5. Submit one 10-sample test wave: `bin/manager_cycle.sh config/bouchet.sh`.
-6. Verify outputs with `bin/scan_results.sh config/bouchet.sh` and inspect `state/output_validation.tsv`.
-7. Set `ENABLE_TRANSFER=1` and run a cycle.
-8. Inspect the complete sample directories on Workspace and verify Globus tasks.
-9. Only after manual validation, set `ENABLE_LOCAL_CLEANUP=1`.
+```bash
+bin/initialize_samples.sh config/bouchet.sh
+bin/submit_import_existing.sh config/bouchet.sh
+squeue -u "$USER"
+tail -f /nfs/roberts/project/pi_njl27/lt692/primate_run_manager/logs/import_existing_<jobid>.out
+```
+
+If a config defines `RUNTIME_LOG_DIR`, the submit helper places the output and error files there. Otherwise they are placed under `${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}/logs`. After the job completes, inspect both status and the incomplete report:
+
+```bash
+bin/show_status.sh config/bouchet.sh
+bin/report_incomplete_samples.sh config/bouchet.sh
+```
+
+Then follow this sequence for new pipeline work:
+
+1. Run one dry cycle: `bin/manager_cycle.sh config/bouchet.sh`.
+2. Inspect `manifests/pipeline_waves/*.samples.tsv`, the printed launcher command, and `bin/show_status.sh config/bouchet.sh`.
+3. Set `DRY_RUN=0` while leaving transfer and cleanup disabled.
+4. Submit one 10-sample test wave: `bin/manager_cycle.sh config/bouchet.sh`.
+5. Verify outputs during a manager job and inspect `state/output_validation.tsv`.
+6. Set `ENABLE_TRANSFER=1` and run a cycle.
+7. Inspect the complete sample directories on Workspace and verify Globus tasks.
+8. Only after manual validation, set `ENABLE_LOCAL_CLEANUP=1`.
 
 Useful exact commands:
 
 ```bash
 cd /home/lt692/ycga_work/primate_run_manager
 bin/initialize_samples.sh config/bouchet.sh
+bin/submit_import_existing.sh config/bouchet.sh
 DRY_RUN=1 bin/manager_cycle.sh config/bouchet.sh # use a config override/copy; sourced config values take precedence
 column -t -s $'\t' manifests/pipeline_waves/*.samples.tsv
 bin/show_status.sh config/bouchet.sh
-bin/scan_results.sh config/bouchet.sh
 RUN_MANAGER_CONFIG="$PWD/config/bouchet.sh" sbatch manager_daemon.slurm
 ```
 
@@ -116,6 +134,6 @@ Run repository checks with:
 
 ```bash
 find . -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
-shellcheck config/*.sh lib/common.sh bin/*.sh tests/*.sh
+shellcheck config/*.sh lib/common.sh bin/*.sh tests/*.sh run_import_existing.slurm
 bash tests/run_tests.sh
 ```

@@ -2,7 +2,7 @@
 source "$(dirname "$0")/test_helper.sh"; new_env
 "$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null
 mkdir -p "$T/results/s1/alignment"; printf partial > "$T/results/s1/alignment/s1.cram"
-"$REPO/bin/import_existing_results.sh" "$T/config.sh" >/dev/null
+ALLOW_INTERACTIVE_IMPORT=1 "$REPO/bin/import_existing_results.sh" "$T/config.sh" >/dev/null
 assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_INCOMPLETE_REVIEW"{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
 assert test -e "$T/results/s1/alignment/s1.cram"
 # Review samples are excluded; only ordinary pending samples enter the first wave.

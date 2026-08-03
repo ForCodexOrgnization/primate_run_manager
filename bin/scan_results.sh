@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
+interactive_full_scan_override_set=${ALLOW_INTERACTIVE_FULL_SCAN+x}
+interactive_full_scan_override=${ALLOW_INTERACTIVE_FULL_SCAN:-0}
 load_config "${1:-}"; ensure_state_files
+[[ "$interactive_full_scan_override_set" == x ]] && ALLOW_INTERACTIVE_FULL_SCAN="$interactive_full_scan_override"
+: "${SCAN_RESULTS_SCOPE:=full}" "${REQUIRE_SLURM_FOR_FULL_SCAN:=1}" "${ALLOW_INTERACTIVE_FULL_SCAN:=0}"
+if [[ "$SCAN_RESULTS_SCOPE" == full && "$REQUIRE_SLURM_FOR_FULL_SCAN" == 1 && -z "${SLURM_JOB_ID:-}" && "$ALLOW_INTERACTIVE_FULL_SCAN" != 1 ]]; then
+    cat >&2 <<'EOF'
+Full sample validation must run through Slurm.
+Use bin/submit_import_existing.sh CONFIG.
+EOF
+    exit 1
+fi
 : "${SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS:=600}"
 [[ "$SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || die "SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS must be a non-negative integer"
 if command -v module >/dev/null 2>&1 && [[ -n "${SAMTOOLS_MODULE:-}" ]]; then module load "$SAMTOOLS_MODULE" >/dev/null 2>&1 || die "Unable to load SAMtools module: $SAMTOOLS_MODULE"; fi
@@ -18,11 +29,22 @@ file_signature() {
     fi
 }
 
-total=$(awk -F '\t' 'NR>1 && $4!~/^(TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED)$/{n++} END{print n+0}' "$STATUS_FILE")
+if [[ "$SCAN_RESULTS_SCOPE" == active ]]; then
+ active_status_regex='^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING)$'
+ [[ "${FORCE_SCAN_INCOMPLETE_REVIEW:-0}" == 1 ]] && active_status_regex='^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING|PIPELINE_INCOMPLETE_REVIEW)$'
+ total=$(awk -F '\t' -v r="$active_status_regex" 'NR>1&&$4~r{n++}END{print n+0}' "$STATUS_FILE")
+ (( total > 0 )) || { log "No active pipeline samples to validate"; exit 0; }
+else
+ total=$(awk -F '\t' 'NR>1 && $4!~/^(TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED)$/{n++} END{print n+0}' "$STATUS_FILE")
+fi
 current=0
 while IFS=$'\t' read -r sample species hpc status job wave attempts error task workspace transfer cleanup updated oldnotes; do
  [[ "$sample" == sample_id ]] && continue
- case "$status" in TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED) continue;; esac
+ if [[ "$SCAN_RESULTS_SCOPE" == active ]]; then
+   [[ "$status" =~ $active_status_regex ]] || continue
+ else
+   case "$status" in TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED) continue;; esac
+ fi
  current=$((current + 1)); log "Validating sample $sample ($current/$total)"
  dir="${LOCAL_RESULTS}/${sample}"; cram="$dir/alignment/${sample}.cram"; crai="${cram}.crai"; [[ -s "$crai" ]] || crai="$dir/alignment/${sample}.crai"
  vcf=$(find_exact_one "$dir" "${sample}.round2.original_coords.clean.final.split.vcf.gz"); cov2=$(find_exact_one "$dir" "${sample}.round2.original_coords.per_base_coverage.tsv"); covn=$(find_exact_one "$dir" "${sample}.numt_decoy.clean.realigned.per_base_coverage.tsv"); mtcn=$(find_exact_one "$dir" "${sample}.round2.mtcn.tsv")
@@ -44,6 +66,12 @@ while IFS=$'\t' read -r sample species hpc status job wave attempts error task w
      fi
      if (( quickcheck_rc == 0 )); then cram_ok=1; touch "${cram}.complete"
      elif (( quickcheck_rc == 124 )); then notes+=(cram_quickcheck_timeout)
+     elif (( quickcheck_rc == 137 )); then
+       transient_file="${MANAGER_ROOT}/state/validation_transient_errors.tsv"
+       [[ -e "$transient_file" ]] || printf 'sample_id\tscan_time\terror\n' > "$transient_file"
+       printf '%s\t%s\tcram_quickcheck_killed\n' "$sample" "$(now_iso)" >> "$transient_file"
+       log "TRANSIENT: $sample cram_quickcheck_killed; validation cache and sample state unchanged"
+       continue
      else notes+=(invalid_cram); fi
    elif [[ -f "${cram}.complete" ]]; then cram_ok=1
    else notes+=(cram_unverified_no_samtools_or_marker); fi

@@ -4,7 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR
 load_config "${1:-}"; ensure_state_files
 [[ "$ENABLE_TRANSFER" == 1 ]] || exit 0
 [[ "$DRY_RUN" == 1 ]] && { log "DRY_RUN: not querying Globus tasks"; exit 0; }
-command -v globus >/dev/null || die "globus CLI not found"
+load_globus_module
 mapfile -t rows < <(awk -F '\t' 'NR>1&&$3=="ACTIVE"{print $1"\t"$2"\t"$4}' "$TRANSFER_TASK_FILE")
 for row in "${rows[@]}"; do IFS=$'\t' read -r batch task samples <<< "$row"; current=$(globus task show "$task" --format=UNIX --jmespath status 2>/dev/null || echo UNKNOWN); new=ACTIVE
  case "$current" in SUCCEEDED) new=SUCCEEDED;; FAILED|CANCELED|CANCELLED|EXPIRED) new="$current"; globus task event-list "$task" --filter-errors --limit 20 >&2 || true;; esac

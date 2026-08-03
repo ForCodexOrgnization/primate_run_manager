@@ -24,7 +24,7 @@ sed -i 's/MAX_ACTIVE_TRANSFER_TASKS=2/MAX_ACTIVE_TRANSFER_TASKS=3/' "$T/config.s
 
 # Historical inventory reports unknown first-level directories and excludes infrastructure.
 new_env; mkdir -p "$T/results"/{s1,mystery,logs,lost+found,numt_discovery,numt_besthit}
-"$REPO/bin/import_existing_results.sh" "$T/config.sh" >/dev/null
+ALLOW_INTERACTIVE_IMPORT=1 "$REPO/bin/import_existing_results.sh" "$T/config.sh" >/dev/null
 assert grep -q $'^s1\t' "$T/manager/state/existing_local_samples.tsv"
 assert grep -q $'^mystery\t' "$T/manager/state/unrecognized_local_directories.tsv"
 assert test "$(wc -l < "$T/manager/state/unrecognized_local_directories.tsv")" -eq 2

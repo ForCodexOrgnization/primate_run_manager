@@ -32,7 +32,7 @@ for entry in "${waves[@]}"; do
  (( all_completed || failed )) || { log "$wave has unrecognized sacct terminal state; leaving active"; continue; }
  terminal=COMPLETE; terminal_state=COMPLETED; (( failed )) && { terminal=FAILED; terminal_state=FAILED; }
  with_state_lock update_wave_row "$wave" "slurm_state=$terminal_state" "status=$terminal"
- "${SCRIPT_DIR}/scan_results.sh" "$1"
+ "${SCRIPT_DIR}/scan_active_results.sh" "$1"
  complete=0; incomplete=0
  while read -r s; do
    st=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE")

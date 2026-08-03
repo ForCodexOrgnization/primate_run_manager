@@ -7,7 +7,11 @@ MANAGER_ROOT=$(bash -c 'source "$1"; printf "%s" "$MANAGER_ROOT"' _ "$cfg")
 mkdir -p "$MANAGER_ROOT/state/locks"; exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8 || { log "Another manager cycle is active"; exit 0; }
 load_config "$cfg"; ensure_state_files; validate_config
 "${SCRIPT_DIR}/update_wave_states.sh" "$cfg"
-"${SCRIPT_DIR}/scan_results.sh" "$cfg"
+if [[ "$ENABLE_FULL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
+    "${SCRIPT_DIR}/scan_results.sh" "$cfg"
+elif [[ "$ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
+    "${SCRIPT_DIR}/scan_active_results.sh" "$cfg"
+fi
 "${SCRIPT_DIR}/check_globus_tasks.sh" "$cfg"
 "${SCRIPT_DIR}/cleanup_transferred_samples.sh" "$cfg"
 "${SCRIPT_DIR}/submit_globus_batch.sh" "$cfg"

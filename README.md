@@ -94,6 +94,10 @@ squeue -u "$USER"
 tail -f /nfs/roberts/project/pi_njl27/lt692/primate_run_manager/logs/import_existing_<jobid>.out
 ```
 
+Historical import is the full validation workflow. It may inspect every
+assigned sample and therefore must run as the Slurm job above; direct
+interactive full scans are blocked by default.
+
 If a config defines `RUNTIME_LOG_DIR`, the submit helper places the output and error files there. Otherwise they are placed under `${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}/logs`. After the job completes, inspect both status and the incomplete report:
 
 ```bash
@@ -103,14 +107,31 @@ bin/report_incomplete_samples.sh config/bouchet.sh
 
 Then follow this sequence for new pipeline work:
 
-1. Run one dry cycle: `bin/manager_cycle.sh config/bouchet.sh`.
+1. Validate the configured Globus CLI, then submit one normal manager cycle:
+   ```bash
+   bin/check_globus.sh config/bouchet.sh
+   bin/submit_manager_cycle.sh config/bouchet.sh
+   ```
 2. Inspect `manifests/pipeline_waves/*.samples.tsv`, the printed launcher command, and `bin/show_status.sh config/bouchet.sh`.
 3. Set `DRY_RUN=0` while leaving transfer and cleanup disabled.
-4. Submit one 10-sample test wave: `bin/manager_cycle.sh config/bouchet.sh`.
+4. Submit one 10-sample test wave: `bin/submit_manager_cycle.sh config/bouchet.sh`.
 5. Verify outputs during a manager job and inspect `state/output_validation.tsv`.
 6. Set `ENABLE_TRANSFER=1` and run a cycle.
 7. Inspect the complete sample directories on Workspace and verify Globus tasks.
 8. Only after manual validation, set `ENABLE_LOCAL_CLEANUP=1`.
+
+On Bouchet, `GLOBUS_MODULE` identifies the cluster module that provides the
+CLI. The manager loads it automatically immediately before a live Globus
+operation if `globus` is not already on `PATH`; manual `module load` is no
+longer required. `bin/check_globus.sh` is read-only: it prints the selected
+executable and version and runs `globus whoami`, but does not create or modify
+a transfer.
+
+Normal manager cycles use `scan_active_results.sh` and validate only samples in
+active pipeline states. `ENABLE_FULL_SCAN_IN_MANAGER_CYCLE=0` is the safe
+default; transfer-only cycles consequently do not rescan historical CRAM files.
+If full scanning is explicitly enabled, `REQUIRE_SLURM_FOR_FULL_SCAN=1` blocks
+it outside Slurm unless the administrative interactive override is also set.
 
 Useful exact commands:
 
@@ -118,7 +139,7 @@ Useful exact commands:
 cd /home/lt692/ycga_work/primate_run_manager
 bin/initialize_samples.sh config/bouchet.sh
 bin/submit_import_existing.sh config/bouchet.sh
-DRY_RUN=1 bin/manager_cycle.sh config/bouchet.sh # use a config override/copy; sourced config values take precedence
+bin/submit_manager_cycle.sh config/bouchet.sh # use a DRY_RUN=1 config override/copy for validation
 column -t -s $'\t' manifests/pipeline_waves/*.samples.tsv
 bin/show_status.sh config/bouchet.sh
 RUN_MANAGER_CONFIG="$PWD/config/bouchet.sh" sbatch manager_daemon.slurm

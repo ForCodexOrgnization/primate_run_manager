@@ -5,6 +5,19 @@ now_iso() { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
 log() { printf '[%s] %s\n' "$(now_iso)" "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
+load_globus_module() {
+    command -v globus >/dev/null 2>&1 && return 0
+
+    if [[ -n "${GLOBUS_MODULE:-}" ]] && command -v module >/dev/null 2>&1; then
+        if module load "$GLOBUS_MODULE"; then
+            log "Loaded Globus module: $GLOBUS_MODULE"
+        fi
+    fi
+
+    command -v globus >/dev/null 2>&1 ||
+        die "Globus CLI not found. Configure GLOBUS_MODULE or install globus-cli."
+}
+
 state_header() { printf 'sample_id\tspecies\thpc\tstatus\tslurm_job_id\twave_id\tpipeline_attempts\tlast_pipeline_error\tglobus_task_id\tworkspace_path\ttransfer_status\tcleanup_status\tlast_update\tnotes\n'; }
 wave_header() { printf 'wave_id\tsample_manifest\tsample_count\tpipeline_job_id\tsubmit_time\tslurm_state\tcomplete_count\tincomplete_count\tstatus\tlast_update\tnotes\n'; }
 transfer_header() { printf 'batch_id\ttask_id\tstatus\tsample_file\tsubmit_time\tlast_update\tnotes\n'; }
@@ -19,6 +32,10 @@ load_config() {
     : "${REQUIRE_SLURM_FOR_EXISTING_IMPORT:=1}"
     : "${ALLOW_INTERACTIVE_IMPORT:=0}"
     : "${SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS:=600}"
+    : "${ENABLE_FULL_SCAN_IN_MANAGER_CYCLE:=0}"
+    : "${ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE:=1}"
+    : "${REQUIRE_SLURM_FOR_FULL_SCAN:=1}"
+    : "${ALLOW_INTERACTIVE_FULL_SCAN:=0}"
     STATUS_FILE="${MANAGER_ROOT}/state/sample_status.tsv"
     WAVE_STATUS_FILE="${MANAGER_ROOT}/state/wave_status.tsv"
     TRANSFER_TASK_FILE="${MANAGER_ROOT}/state/transfer_tasks.tsv"
@@ -40,10 +57,10 @@ validate_config() {
     for v in PIPELINE_WAVE_SIZE PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
-    for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS; do
+    for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS ENABLE_FULL_SCAN_IN_MANAGER_CYCLE ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE REQUIRE_SLURM_FOR_FULL_SCAN ALLOW_INTERACTIVE_FULL_SCAN; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
-    for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT; do
+    for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT ENABLE_FULL_SCAN_IN_MANAGER_CYCLE ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE REQUIRE_SLURM_FOR_FULL_SCAN ALLOW_INTERACTIVE_FULL_SCAN; do
         [[ "${!v}" == 0 || "${!v}" == 1 ]] || die "$v must be 0 or 1"
     done
     for v in ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM; do
@@ -57,7 +74,7 @@ validate_config() {
     (( FORCE_TRANSFER_PERCENT <= EMERGENCY_PERCENT )) || die "FORCE_TRANSFER_PERCENT must be <= EMERGENCY_PERCENT"
     case "${GLOBUS_SYNC_LEVEL:-}" in exists|size|mtime|checksum) ;; *) die "GLOBUS_SYNC_LEVEL must be one of: exists size mtime checksum" ;; esac
     if [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]]; then command -v sbatch >/dev/null || die "sbatch not found"; fi
-    if [[ "$ENABLE_TRANSFER" == 1 ]]; then command -v globus >/dev/null || die "globus not found"; fi
+    if [[ "$ENABLE_TRANSFER" == 1 && "$DRY_RUN" == 0 ]]; then load_globus_module; fi
 }
 
 with_state_lock() { local lock_file="${MANAGER_ROOT}/state/locks/state.lock"; exec 9>"$lock_file"; flock -x 9; "$@"; local rc=$?; flock -u 9; return "$rc"; }

@@ -13,7 +13,7 @@ cleanup_one() {
  require_nonempty "$vcf" && gzip -t "$vcf" >/dev/null 2>&1 && require_nonempty "$cov2" && require_nonempty "$covn" && require_nonempty "$mtcn" || { log "$sample final validation failed; refusing cleanup"; return 1; }
  [[ -s "${vcf}.tbi" ]] && tbi="${vcf}.tbi"
  if [[ "$DRY_RUN" == 1 ]]; then printf 'DRY RUN: globus ls %q\n' "${DEST_COLLECTION}:${dest}"; printf 'DRY RUN: rm -rf -- %q\n' "$dir"; return 0; fi
- command -v globus >/dev/null || die "globus CLI not found"
+ load_globus_module
  local listing cram_name
  cram_name="$sample.cram"
  listing=$(globus ls "${DEST_COLLECTION}:${dest}" --recursive 2>/dev/null) || { log "$sample destination not verified"; return 1; }

@@ -37,7 +37,7 @@ inventory_local_directories() {
     mv "$tmp_existing" "$existing_file"; mv "$tmp_unknown" "$unrecognized_file"
 }
 with_state_lock inventory_local_directories
-"${SCRIPT_DIR}/scan_results.sh" "$1"
+ALLOW_INTERACTIVE_FULL_SCAN=1 "${SCRIPT_DIR}/scan_results.sh" "$1"
 classify_imports() {
     local sample status next
     while IFS=$'\t' read -r sample _ _ status _; do

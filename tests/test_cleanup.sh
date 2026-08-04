@@ -3,18 +3,23 @@ source "$(dirname "$0")/test_helper.sh"; new_env
 "$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null
 mkdir -p "$T/results/s1/out"; touch "$T/results/s1/keep"
 "$REPO/bin/cleanup_transferred_samples.sh" "$T/config.sh" >/dev/null; assert test -e "$T/results/s1/keep"
-s=s1; d="$T/results/$s/out"; printf ok | gzip > "$d/$s.round2.original_coords.clean.final.split.vcf.gz"; printf i > "$d/$s.round2.original_coords.clean.final.split.vcf.gz.tbi"; printf c > "$d/$s.round2.original_coords.per_base_coverage.tsv"; printf n > "$d/$s.numt_decoy.clean.realigned.per_base_coverage.tsv"; printf m > "$d/$s.round2.mtcn.tsv"
+s=s1; cromwell="$T/results/$s/round_1_variant_calling_decoy/cromwell-executions/MitochondriaMultiSamplePipeline/12345678-1234-1234-1234-123456789abc"
+cram_dir="$cromwell/call-Align/shard-0/execution"; vcf_dir="$cromwell/call-VariantCalling/shard-0/execution"; cov2_dir="$cromwell/call-Round2Coverage/shard-0/execution"; covn_dir="$cromwell/call-CoverageAtEveryBase/shard-0/execution"; mtcn_dir="$cromwell/call-MtCN/shard-0/execution"
+mkdir -p "$cram_dir" "$vcf_dir" "$cov2_dir" "$covn_dir" "$mtcn_dir"
+printf r > "$cram_dir/$s.cram"; printf ok | gzip > "$vcf_dir/$s.round2.original_coords.clean.final.split.vcf.gz"; printf i > "$vcf_dir/$s.round2.original_coords.clean.final.split.vcf.gz.tbi"; printf c > "$cov2_dir/$s.round2.original_coords.per_base_coverage.tsv"; printf n > "$covn_dir/$s.numt_decoy.clean.realigned.per_base_coverage.tsv"; printf m > "$mtcn_dir/$s.round2.mtcn.tsv"
 awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s1"{$4="TRANSFERRED_FULL";$9="task1";$11="SUCCEEDED"}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"
 cat > "$T/mockbin/globus" <<'G'
 #!/usr/bin/env bash
 if [[ "$1" == ls ]]; then
-cat <<EOF
-alignment/s1.cram
-out/s1.round2.original_coords.clean.final.split.vcf.gz
-out/s1.round2.original_coords.per_base_coverage.tsv
-out/s1.numt_decoy.clean.realigned.per_base_coverage.tsv
-out/s1.round2.mtcn.tsv
-EOF
+[[ " $* " != *" --recursive "* ]] || exit 2
+case "$2" in
+  *call-Align/shard-0/execution/) printf 's1.cram   \r\n' ;;
+  *call-VariantCalling/shard-0/execution/) printf 's1.round2.original_coords.clean.final.split.vcf.gz/\r\n' ;;
+  *call-Round2Coverage/shard-0/execution/) printf 's1.round2.original_coords.per_base_coverage.tsv  \r\n' ;;
+  *call-CoverageAtEveryBase/shard-0/execution/) printf 's1.numt_decoy.clean.realigned.per_base_coverage.tsv\r\n' ;;
+  *call-MtCN/shard-0/execution/) printf 's1.round2.mtcn.tsv \r\n' ;;
+  *) exit 3 ;;
+esac
 exit 0
 fi
 exit 1

@@ -33,11 +33,17 @@ assert test "$(wc -l < "$T/manager/state/unrecognized_local_directories.tsv")" -
 # Cleanup never selects incomplete samples, and refuses an incomplete destination.
 new_env; "$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null; s=s1; d="$T/results/$s/out"; mkdir -p "$d"
 printf ok | gzip > "$d/$s.round2.original_coords.clean.final.split.vcf.gz"; printf c > "$d/$s.round2.original_coords.per_base_coverage.tsv"; printf n > "$d/$s.numt_decoy.clean.realigned.per_base_coverage.tsv"; printf m > "$d/$s.round2.mtcn.tsv"
+mkdir -p "$T/results/$s/alignment"; printf r > "$T/results/$s/alignment/$s.cram"
 sed -i 's/ENABLE_LOCAL_CLEANUP=0/ENABLE_LOCAL_CLEANUP=1/' "$T/config.sh"
 cat > "$T/mockbin/globus" <<'EOF'
 #!/usr/bin/env bash
-printf 'alignment/s1.cram\n'
+printf 'not-the-required-file.cram\n'
 EOF
 chmod +x "$T/mockbin/globus"; "$REPO/bin/cleanup_transferred_samples.sh" "$T/config.sh"; assert test -d "$T/results/s1"
 awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s1"{$4="TRANSFERRED_FULL"}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"
-"$REPO/bin/cleanup_transferred_samples.sh" "$T/config.sh"; assert test -d "$T/results/s1"
+cleanup_log=$("$REPO/bin/cleanup_transferred_samples.sh" "$T/config.sh" 2>&1)
+assert test -d "$T/results/s1"
+assert grep -Fq 'required filename: s1.cram' <<< "$cleanup_log"
+assert grep -Fq 'remote parent checked: /dest/s1/alignment/' <<< "$cleanup_log"
+assert grep -Fq 'not-the-required-file.cram' <<< "$cleanup_log"
+assert test "$(awk -F '\t' '$1=="s1"{print $4}' "$T/manager/state/sample_status.tsv")" = TRANSFERRED_FULL

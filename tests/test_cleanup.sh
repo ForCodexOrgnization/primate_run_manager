@@ -8,13 +8,13 @@ awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s1"{$4="TRANSFERRED_FULL";$9="tas
 cat > "$T/mockbin/globus" <<'G'
 #!/usr/bin/env bash
 if [[ "$1" == ls ]]; then
-cat <<EOF
-alignment/s1.cram
-out/s1.round2.original_coords.clean.final.split.vcf.gz
-out/s1.round2.original_coords.per_base_coverage.tsv
-out/s1.numt_decoy.clean.realigned.per_base_coverage.tsv
-out/s1.round2.mtcn.tsv
-EOF
+[[ " $* " == *" --recursive "* ]] || exit 2
+printf '%s\r\n' \
+  'archive/alignment/s1.cram   ' \
+  'shard-0/deep/vcf/s1.round2.original_coords.clean.final.split.vcf.gz/' \
+  'shard-0/deep/coverage/s1.round2.original_coords.per_base_coverage.tsv  ' \
+  'shard-0/deep/coverage/s1.numt_decoy.clean.realigned.per_base_coverage.tsv' \
+  'shard-0/deep/reports/s1.round2.mtcn.tsv '
 exit 0
 fi
 exit 1

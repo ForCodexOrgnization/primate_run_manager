@@ -40,4 +40,8 @@ printf 'alignment/s1.cram\n'
 EOF
 chmod +x "$T/mockbin/globus"; "$REPO/bin/cleanup_transferred_samples.sh" "$T/config.sh"; assert test -d "$T/results/s1"
 awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s1"{$4="TRANSFERRED_FULL"}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"
-"$REPO/bin/cleanup_transferred_samples.sh" "$T/config.sh"; assert test -d "$T/results/s1"
+cleanup_log=$("$REPO/bin/cleanup_transferred_samples.sh" "$T/config.sh" 2>&1)
+assert test -d "$T/results/s1"
+assert grep -Fq 'required filename: s1.round2.original_coords.clean.final.split.vcf.gz' <<< "$cleanup_log"
+assert grep -Fq 'alignment/s1.cram' <<< "$cleanup_log"
+assert test "$(awk -F '\t' '$1=="s1"{print $4}' "$T/manager/state/sample_status.tsv")" = TRANSFERRED_FULL

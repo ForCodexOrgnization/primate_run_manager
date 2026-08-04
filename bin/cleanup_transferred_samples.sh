@@ -14,11 +14,35 @@ cleanup_one() {
  [[ -s "${vcf}.tbi" ]] && tbi="${vcf}.tbi"
  if [[ "$DRY_RUN" == 1 ]]; then printf 'DRY RUN: globus ls %q\n' "${DEST_COLLECTION}:${dest}"; printf 'DRY RUN: rm -rf -- %q\n' "$dir"; return 0; fi
  load_globus_module
- local listing cram_name
+ local listing cram_name required
  cram_name="$sample.cram"
  listing=$(globus ls "${DEST_COLLECTION}:${dest}" --recursive 2>/dev/null) || { log "$sample destination not verified"; return 1; }
  for required in "$cram_name" "$(basename "$vcf")" "$(basename "$cov2")" "$(basename "$covn")" "$(basename "$mtcn")"; do
-   printf '%s\n' "$listing" | awk -v f="$required" '{sub(/\/$/,""); n=split($0,a,"/"); if(a[n]==f) found=1} END{exit !found}' || { log "$sample destination missing core file: $required; refusing cleanup"; return 1; }
+   if ! printf '%s\n' "$listing" | awk -v f="$required" '
+     {
+       gsub(/\r/, "")
+       sub(/[[:space:]]+$/, "")
+       sub(/\/$/, "")
+       n=split($0, components, "/")
+       if (components[n] == f) found=1
+     }
+     END { exit !found }
+   '; then
+     log "$sample destination missing core file: $required; refusing cleanup"
+     log "$sample required filename: $required"
+     log "$sample destination candidates (coverage, vcf, cram, or mtcn):"
+     printf '%s\n' "$listing" | awk '
+       {
+         line=$0
+         gsub(/\r/, "", line)
+         sub(/[[:space:]]+$/, "", line)
+         sub(/\/$/, "", line)
+         lower=tolower(line)
+         if (lower ~ /(coverage|vcf|cram|mtcn)/) print line
+       }
+     ' >&2
+     return 1
+   fi
  done
  local src target tmp; for pair in "$vcf:$ANALYSIS_ROOT/vcf" "$cov2:$ANALYSIS_ROOT/round2_coverage" "$covn:$ANALYSIS_ROOT/numt_decoy_coverage" "$mtcn:$ANALYSIS_ROOT/mtcn"; do src=${pair%%:*}; target=${pair#*:}/$(basename "$src"); tmp="${target}.tmp.$$"; cp -p "$src" "$tmp"; cmp -s "$src" "$tmp" || { rm -f "$tmp"; return 1; }; mv "$tmp" "$target"; done
  if [[ -n "$tbi" ]]; then target="$ANALYSIS_ROOT/vcf/$(basename "$tbi")"; tmp="${target}.tmp.$$"; cp -p "$tbi" "$tmp"; cmp -s "$tbi" "$tmp" || { rm -f "$tmp"; return 1; }; mv "$tmp" "$target"; fi

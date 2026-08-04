@@ -142,10 +142,52 @@ bin/submit_import_existing.sh config/bouchet.sh
 bin/submit_manager_cycle.sh config/bouchet.sh # use a DRY_RUN=1 config override/copy for validation
 column -t -s $'\t' manifests/pipeline_waves/*.samples.tsv
 bin/show_status.sh config/bouchet.sh
-RUN_MANAGER_CONFIG="$PWD/config/bouchet.sh" sbatch manager_daemon.slurm
 ```
 
 For an environment override, make a testing copy of the config and edit `DRY_RUN=1`; shell variables in the sourced config intentionally define the authoritative settings.
+
+## Continuous manager daemon
+
+The manager can run continuously as a five-day Slurm job; it is never started
+as a login-node background process. The daemon runs one `manager_cycle.sh` at a
+time, waits `MANAGER_POLL_SECONDS` after each successful cycle, and uses bounded
+delays of 5, 15, and then 30 minutes after consecutive failures. A separate
+daemon lock prevents overlapping daemon processes. Five minutes before its
+wall time, Slurm signals the job so it can finish its active cycle and submit a
+replacement with an `afterany` dependency. It does not pull Git changes, reset
+state, or alter the conservative incomplete-sample retry policy.
+
+Start, check, and stop it with:
+
+```bash
+bin/submit_manager_daemon.sh config/bouchet.sh
+squeue -u "$USER" -n primate_manager_daemon
+bin/show_status.sh config/bouchet.sh
+bin/stop_manager_daemon.sh config/bouchet.sh
+```
+
+The submit helper refuses to create a daemon while one owned by the user is
+already pending or running. The stop helper selects only this user's exact
+`primate_manager_daemon` job name, leaving pipeline, transfer, and ordinary
+manager-cycle jobs untouched. Daemon output is written separately as
+`logs/manager_daemon_<jobid>.out` and `logs/manager_daemon_<jobid>.err` (under
+`RUNTIME_LOG_DIR` when configured).
+
+Recommended current Bouchet automation settings are:
+
+```bash
+ENABLE_TRANSFER=1
+ENABLE_LOCAL_CLEANUP=1
+ENABLE_PIPELINE_SUBMIT=0
+MAX_ACTIVE_TRANSFER_TASKS=2
+TRANSFER_BATCH_SIZE=25
+MANAGER_POLL_SECONDS=1800
+```
+
+Keep `AUTO_RETRY_IMPORTED_INCOMPLETE=0`; samples in
+`PIPELINE_INCOMPLETE_REVIEW` continue to require explicit approval. To disable
+continuous automation, use the stop helper. Manual resubmission with the start
+helper is also clean if automatic replacement cannot be submitted.
 
 ## Validation and safety
 

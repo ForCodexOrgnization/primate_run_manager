@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/test_helper.sh"
 
-# Shipped cluster configurations are inert unless an operator opts in.
-for config in "$REPO/config/bouchet.sh" "$REPO/config/hpc2.template.sh"; do
-  assert grep -q '^ENABLE_PIPELINE_SUBMIT=0$' "$config"
-  assert grep -q '^ENABLE_TRANSFER=0$' "$config"
-  assert grep -q '^ENABLE_LOCAL_CLEANUP=0$' "$config"
-  assert grep -q '^DRY_RUN=1$' "$config"
-done
+# Bouchet's reviewed transfer automation is enabled, while pipeline submission
+# and imported-incomplete retries remain conservative.
+assert grep -q '^ENABLE_PIPELINE_SUBMIT=0$' "$REPO/config/bouchet.sh"
+assert grep -q '^ENABLE_TRANSFER=1$' "$REPO/config/bouchet.sh"
+assert grep -q '^ENABLE_LOCAL_CLEANUP=1$' "$REPO/config/bouchet.sh"
+assert grep -q '^AUTO_RETRY_IMPORTED_INCOMPLETE=0$' "$REPO/config/bouchet.sh"
+
+# The unconfigured second-cluster template remains inert.
+assert grep -q '^ENABLE_PIPELINE_SUBMIT=0$' "$REPO/config/hpc2.template.sh"
+assert grep -q '^ENABLE_TRANSFER=0$' "$REPO/config/hpc2.template.sh"
+assert grep -q '^ENABLE_LOCAL_CLEANUP=0$' "$REPO/config/hpc2.template.sh"
+assert grep -q '^DRY_RUN=1$' "$REPO/config/hpc2.template.sh"
 
 # A required path check blocks Globus before it creates a batch manifest.
 new_env; "$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null

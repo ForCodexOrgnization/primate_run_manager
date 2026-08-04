@@ -5,7 +5,7 @@ source "$(dirname "$0")/test_helper.sh"; new_env
 assert test "$(wc -l < "$T/invocations")" -eq 1
 manifest=$(find "$T/manager/manifests/pipeline_waves" -name '*.samples.tsv')
 assert test "$(wc -l < "$manifest")" -eq 2
-assert grep -q $'^5\t1\t.*/wave_' "$T/invocations"
+assert grep -q $'^5\t1\t.*/wave_.*\tNextflow/test$' "$T/invocations"
 assert grep -q $'\t123456\t' "$T/manager/state/wave_status.tsv"
 assert test "$(awk -F '\t' '$4=="WAVE_SUBMITTED"{n++}END{print n+0}' "$T/manager/state/sample_status.tsv")" -eq 2
 # An active wave prevents duplicate selection.

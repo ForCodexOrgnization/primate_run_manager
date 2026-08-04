@@ -5,7 +5,7 @@ new_env() {
  printf 's1\tsp1\ns2\tsp2\ns3\tsp3\n' > "$T/samples/list.tsv"
  cat > "$T/launcher.sh" <<'L'
 #!/usr/bin/env bash
-printf '%s\t%s\t%s\n' "$BATCH_SIZE" "$CHAIN_CONCURRENT_BATCHES" "$NF_BASE_WORK_DIR" >> "$TEST_ROOT/invocations"
+printf '%s\t%s\t%s\t%s\n' "$BATCH_SIZE" "$CHAIN_CONCURRENT_BATCHES" "$NF_BASE_WORK_DIR" "${NEXTFLOW_MODULE:-}" >> "$TEST_ROOT/invocations"
 echo 'launcher: Submitted batch job 123456'
 L
  chmod +x "$T/launcher.sh"
@@ -60,7 +60,7 @@ ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE=1
 REQUIRE_SLURM_FOR_FULL_SCAN=1
 ALLOW_INTERACTIVE_FULL_SCAN=0
 SAMTOOLS_MODULE=
-NEXTFLOW_MODULE=
+NEXTFLOW_MODULE=Nextflow/test
 MANAGER_POLL_SECONDS=1
 EOF2
 }

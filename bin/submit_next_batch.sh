@@ -16,15 +16,35 @@ seq=0; [[ -s "$seq_file" ]] && read -r seq < "$seq_file"; seq=$((seq+1)); printf
 wave_id=$(printf 'wave_%s_%s_%06d' "$(date -u +%Y%m%dT%H%M%SZ)" "$HPC_NAME" "$seq")
 wave_file="${MANAGER_ROOT}/manifests/pipeline_waves/${wave_id}.samples.tsv"; submit_log="${MANAGER_ROOT}/logs/${wave_id}.submit.log"
 for sample in "${samples[@]}"; do printf '%s\t%s\n' "$sample" "$(sample_species "$sample")"; done > "$wave_file"
-work="${PIPELINE_WORK_ROOT}/${wave_id}"; batch_lists="${work}/batch_lists"; mkdir -p "$batch_lists"
-command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$work" "BATCH_LIST_DIR=$batch_lists" "BATCH_SIZE=$PIPELINE_BATCH_SIZE" "CHAIN_CONCURRENT_BATCHES=$CHAIN_CONCURRENT_BATCHES" "NUMT_CONCURRENT=$NUMT_CONCURRENT" "CLEAN_ON_SUCCESS=$CLEAN_ON_SUCCESS" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" bash "$PIPELINE_LAUNCHER")
-created=$(now_iso)
+manifest_sha=$(file_sha256 "$wave_file"); config_sha=$(file_sha256 "$PIPELINE_CONFIG"); git_commit=$(git_commit_or_unknown)
+retry_mode=fresh; retry_of_wave_id=""; original_wave_id="$wave_id"; original_work_root=""; manifest_match=0; config_match=0; git_match=0
+if [[ "$ENABLE_INFRASTRUCTURE_RESUME" == 1 ]] && [[ $(awk -F '\t' 'NR>1&&$4=="PIPELINE_RETRY_READY"{n++}END{print n+0}' "$STATUS_FILE") -gt 0 ]]; then
+    old_wave=$(latest_failed_wave_for_samples "$wave_file")
+    if [[ -n "$old_wave" ]]; then
+        old_manifest=$(wave_field "$old_wave" sample_manifest); original_work_root=$(wave_field "$old_wave" work_root)
+        old_config_sha=$(wave_field "$old_wave" pipeline_config_sha256); old_git=$(wave_field "$old_wave" pipeline_git_commit)
+        old_manifest_sha=$(wave_field "$old_wave" pipeline_manifest_sha256); old_failure=$(wave_field "$old_wave" failure_class); old_resume=$(wave_field "$old_wave" resume_eligible)
+        [[ "$old_manifest_sha" == "$manifest_sha" ]] && manifest_match=1
+        [[ "$old_config_sha" == "$config_sha" ]] && config_match=1
+        [[ "$old_git" == "$git_commit" ]] && git_match=1
+        fingerprints_ok=0; [[ "$manifest_match" == 1 && "$config_match" == 1 && "$git_match" == 1 ]] && fingerprints_ok=1
+        if [[ "$old_failure" == INFRASTRUCTURE && "$old_resume" == 1 && -n "$original_work_root" && -d "$original_work_root" && ( "$REQUIRE_RESUME_FINGERPRINT_MATCH" == 0 || "$fingerprints_ok" == 1 ) ]] && ! wave_is_active "$old_wave" && ! work_root_resume_in_use "$original_work_root"; then
+            exec 8>"${original_work_root}/.manager_resume.lock"
+            if flock -n 8; then retry_mode=resume; retry_of_wave_id="$old_wave"; original_wave_id=$(wave_field "$old_wave" original_wave_id); [[ -n "$original_wave_id" ]] || original_wave_id="$old_wave"; else log "Resume lock busy for $original_work_root; retry not submitted"; exit 0; fi
+        fi
+    fi
+fi
+work="${PIPELINE_WORK_ROOT}/${wave_id}"; [[ "$retry_mode" == resume ]] && work="$original_work_root"
+batch_lists="${work}/batch_lists"; mkdir -p "$batch_lists"
+log "INFO: retry_mode=$retry_mode"; log "INFO: retry_of_wave_id=$retry_of_wave_id"; log "INFO: original_work_root=$original_work_root"; log "INFO: selected_work_root=$work"; log "INFO: manifest_checksum_match=$manifest_match"; log "INFO: config_checksum_match=$config_match"; log "INFO: git_commit_match=$git_match"
+command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$work" "PIPELINE_RESUME=$([[ "$retry_mode" == resume ]] && echo 1 || echo 0)" "RETRY_OF_WAVE_ID=$retry_of_wave_id" "ORIGINAL_WAVE_ID=$original_wave_id" "BATCH_LIST_DIR=$batch_lists" "BATCH_SIZE=$PIPELINE_BATCH_SIZE" "CHAIN_CONCURRENT_BATCHES=$CHAIN_CONCURRENT_BATCHES" "NUMT_CONCURRENT=$NUMT_CONCURRENT" "CLEAN_ON_SUCCESS=$CLEAN_ON_SUCCESS" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" bash "$PIPELINE_LAUNCHER")
+created=$(now_iso); batch_sha=unknown
 if [[ "$DRY_RUN" == 1 ]]; then
     printf 'DRY RUN: '; printf '%q ' "${command[@]}"; printf '\n'
-    with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t\tDRY_RUN\t0\t0\tCANCELLED\t$created\tdry run; launcher not invoked"
+    with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\tDRY_RUN\t0\t0\tCANCELLED\t$created\tdry run; launcher not invoked\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
     exit 0
 fi
-with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\t\t0\t0\tCREATED\t$created\tlauncher starting"
+with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\t\t0\t0\tCREATED\t$created\tlauncher starting\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
 set +e; "${command[@]}" > >(tee "$submit_log") 2>&1; rc=$?; set -e
 job_id=$(sed -n 's/.*Submitted batch job \([0-9][0-9]*\).*/\1/p' "$submit_log" | tail -n 1)
 if ((rc!=0)) || [[ -z "$job_id" ]]; then

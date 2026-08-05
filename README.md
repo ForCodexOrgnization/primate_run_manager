@@ -200,3 +200,11 @@ find . -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 shellcheck config/*.sh lib/common.sh bin/*.sh tests/*.sh run_import_existing.slurm
 bash tests/run_tests.sh
 ```
+
+## Slurm self-requeue and resume semantics
+
+`NF_Primate_Chain` may self-requeue the same Slurm job or array element before walltime. While Slurm reports `PENDING`, `RUNNING`, `CONFIGURING`, `COMPLETING`, `REQUEUED`, `RESIZING`, or `SUSPENDED` (including states with a trailing `+`), the manager treats the same job/array element as the same active manager wave. The wave remains `SUBMITTED`/`RUNNING`, samples remain in `WAVE_SUBMITTED`, `PIPELINE_RUNNING`, or `PIPELINE_RETRY_RUNNING`, the original work root is retained, and `pipeline_attempts` is unchanged.
+
+If self-requeue does not save the job and Slurm reaches an infrastructure terminal state (`TIMEOUT`, `PREEMPTED`, `NODE_FAIL`, or `BOOT_FAIL` by default), the manager records `failure_class=INFRASTRUCTURE`, `resume_eligible=1`, the wave work root, batch-list location, sample manifest checksum, pipeline config checksum, and pipeline git commit in `state/wave_status.tsv`. A fallback resume is a new manager wave, but it reuses the old Nextflow work root only when the retry manifest exactly matches the failed wave's manifest, the config checksum and git commit still match, no Slurm job from the old wave is active, and no other retry holds `${work_root}/.manager_resume.lock`.
+
+When those checks pass, the launcher receives `NF_BASE_WORK_DIR` pointing at the original work root, `PIPELINE_RESUME=1`, `RETRY_OF_WAVE_ID`, and `ORIGINAL_WAVE_ID`. When any check fails, the retry is a fresh manager wave with a new work root and `PIPELINE_RESUME=0`. Historical `PIPELINE_INCOMPLETE_REVIEW` samples remain excluded from automatic retry/resume unless explicitly approved; `AUTO_RETRY_IMPORTED_INCOMPLETE` remains disabled by default.

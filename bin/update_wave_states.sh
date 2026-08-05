@@ -7,19 +7,19 @@ mapfile -t waves < <(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print
 for entry in "${waves[@]}"; do
  wave=${entry%%$'\t'*}; job=${entry#*$'\t'}; [[ -n "$job" ]] || continue
  mapfile -t task_states < <(sacct -n -j "$job" --format=JobIDRaw,State --parsable2 2>/dev/null | awk -F '|' -v j="$job" '
-   $1 !~ /\.(batch|extern)$/ && $1 ~ ("^" j "_[0-9]+$") {gsub(/[ +].*/,"",$2); if($2!="") print $2}')
+   $1 !~ /\.(batch|extern)$/ && $1 ~ ("^" j "_[0-9]+$") {sub(/ .*/,"",$2); sub(/\+$/,"",$2); if($2!="") print $2}')
  # Preserve compatibility with a non-array launcher, but never mistake job steps
  # for jobs.  For arrays, only the task rows above are relevant.
  if ((${#task_states[@]}==0)); then
-   mapfile -t task_states < <(sacct -n -j "$job" --format=JobIDRaw,State --parsable2 2>/dev/null | awk -F '|' -v j="$job" '$1==j{gsub(/[ +].*/,"",$2);if($2!="")print $2}')
+   mapfile -t task_states < <(sacct -n -j "$job" --format=JobIDRaw,State --parsable2 2>/dev/null | awk -F '|' -v j="$job" '$1==j{sub(/ .*/,"",$2); sub(/\+$/,"",$2);if($2!="")print $2}')
  fi
  ((${#task_states[@]})) || continue
- active=""; failed=0; all_completed=1
+ active=""; failed=0; all_completed=1; terminal_state=COMPLETED
  for state in "${task_states[@]}"; do
    case "$state" in
-     PENDING|CONFIGURING|RUNNING|COMPLETING) active="$state"; all_completed=0;;
+     PENDING|CONFIGURING|RUNNING|COMPLETING|REQUEUED|RESIZING|SUSPENDED) active="$state"; all_completed=0;;
      COMPLETED) ;;
-     FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL|DEADLINE) failed=1; all_completed=0;;
+     FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL) failed=1; terminal_state="$state"; all_completed=0;;
      *) all_completed=0;;
    esac
  done
@@ -30,8 +30,12 @@ for entry in "${waves[@]}"; do
    continue
  fi
  (( all_completed || failed )) || { log "$wave has unrecognized sacct terminal state; leaving active"; continue; }
- terminal=COMPLETE; terminal_state=COMPLETED; (( failed )) && { terminal=FAILED; terminal_state=FAILED; }
- with_state_lock update_wave_row "$wave" "slurm_state=$terminal_state" "status=$terminal"
+ terminal=COMPLETE; (( failed )) && terminal=FAILED
+ failure_class=""; resume_eligible=0
+ if (( failed )); then
+   case " $RESUME_ELIGIBLE_SLURM_STATES " in *" $terminal_state "*) failure_class=INFRASTRUCTURE; resume_eligible=1;; *) failure_class=PIPELINE; resume_eligible=0;; esac
+ fi
+ with_state_lock update_wave_row "$wave" "slurm_state=$terminal_state" "status=$terminal" "failure_class=$failure_class" "resume_eligible=$resume_eligible"
  "${SCRIPT_DIR}/scan_active_results.sh" "$1"
  complete=0; incomplete=0
  while read -r s; do

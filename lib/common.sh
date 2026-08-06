@@ -66,7 +66,6 @@ load_config() {
 
 validate_config() {
     local v
-    [[ -x "$PIPELINE_LAUNCHER" ]] || die "PIPELINE_LAUNCHER missing or not executable: $PIPELINE_LAUNCHER"
     [[ -s "$ASSIGNED_SAMPLE_LIST" ]] || die "ASSIGNED_SAMPLE_LIST missing or empty: $ASSIGNED_SAMPLE_LIST"
     for v in LOCAL_RESULTS ANALYSIS_ROOT PIPELINE_WORK_ROOT SOURCE_ROOT_LOCAL_VIEW; do
         [[ -n "${!v:-}" && "${!v}" != / ]] || die "$v must be non-empty and must not be /"
@@ -74,6 +73,18 @@ validate_config() {
     [[ "$LOCAL_RESULTS" != "$ANALYSIS_ROOT" ]] || die "LOCAL_RESULTS and ANALYSIS_ROOT must differ"
     [[ -n "${SOURCE_ROOT:-}" && -n "${DEST_ROOT:-}" ]] || die "SOURCE_ROOT and DEST_ROOT must be non-empty"
     if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+        [[ -n "${PIPELINE_REPO:-}" ]] || die "PIPELINE_REPO is required for PIPELINE_MODE=streaming_per_sample"
+        [[ -d "$PIPELINE_REPO" ]] || die "PIPELINE_REPO directory does not exist: $PIPELINE_REPO"
+        local workflow
+        for workflow in \
+            launch_pipeline_streaming_per_sample.sh \
+            preprocessing.nf \
+            numt_detection/numt_end2end.nf \
+            primate_pipeline_numt_decoy_round1.nf \
+            primate_pipeline_round2_consensus_NUMT.nf; do
+            [[ -s "$PIPELINE_REPO/$workflow" ]] ||
+                die "PIPELINE_REPO missing required workflow: $PIPELINE_REPO/$workflow"
+        done
         for v in GLOBAL_REF_DIR REF_DIR NUCLEAR_ONLY_REF_DIR; do
             [[ -n "${!v:-}" ]] || die "$v is required for PIPELINE_MODE=streaming_per_sample"
             [[ -d "${!v}" ]] || die "$v directory does not exist: ${!v}"
@@ -83,6 +94,7 @@ validate_config() {
         [[ -n "${SAMTOOLS_MODULE:-}" ]] || command -v samtools >/dev/null 2>&1 ||
             die "SAMTOOLS_MODULE is required unless samtools is already available"
     fi
+    [[ -x "$PIPELINE_LAUNCHER" ]] || die "PIPELINE_LAUNCHER missing or not executable: $PIPELINE_LAUNCHER"
     for v in PIPELINE_WAVE_SIZE SAMPLE_CHAIN_CONCURRENCY IMMEDIATE_SAMPLE_RETRIES IMMEDIATE_RETRY_DELAY_SECONDS CLEAN_VALIDATED_STAGE_WORK REMOVE_SAMPLE_ROOT_ON_SUCCESS STREAM_SMOKE_TEST FAILED_CACHE_CLEAN_TRIGGER_PERCENT FAILED_CACHE_CLEAN_TARGET_PERCENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done

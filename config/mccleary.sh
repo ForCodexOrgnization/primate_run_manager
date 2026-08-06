@@ -9,6 +9,9 @@ ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/mcc_sample_list_update.txt"
 LOCAL_RESULTS="/home/lt692/ycga_work/primate_results"
 ANALYSIS_ROOT="/vast/palmer/scratch/lake_nicole/lt692/primate_final_analysis"
 PIPELINE_WORK_ROOT="/vast/palmer/scratch/lake_nicole/lt692/nf_work_dir_all_per_batch"
+GLOBAL_REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/Ref_whole"
+REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/Ref_chrM"
+NUCLEAR_ONLY_REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/nuclear_only_refs"
 # Conservative first-deployment values. Increase PIPELINE_WAVE_SIZE to 50 and
 # CHAIN_CONCURRENT_BATCHES to 3 after the initial test.
 PIPELINE_WAVE_SIZE=50

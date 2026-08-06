@@ -13,7 +13,10 @@ while IFS=$'\t' read -r sample current attempts; do
  if slurm_state_is_active "$state"; then
    with_state_lock update_sample_fields "$sample" status=PIPELINE_RUNNING notes="sample array element active: $state"
  elif [[ -s "${base}.failure.tsv" && -n "$state" ]]; then
-   next=PIPELINE_DEFERRED_RETRY; (( attempts > MAX_DEFERRED_RETRIES )) && next=PIPELINE_DEFERRED_FAILED
+   wave=$(awk -F '\t' -v x="$sample" 'NR>1&&$1==x{print $6}' "$STATUS_FILE")
+   wave_notes=$(wave_field "$wave" notes); wave_phase=NORMAL
+   [[ "$wave_notes" == *"phase=DEFERRED_RETRY"* ]] && wave_phase=DEFERRED_RETRY
+   next=$(deferred_terminal_status "$wave_phase" "$attempts")
    reason=$(marker_field "${base}.failure.tsv" failure_reason)
    with_state_lock update_sample_fields "$sample" "status=$next" "last_pipeline_error=$reason" "notes=terminal sample worker failure; deferred retry"
  fi

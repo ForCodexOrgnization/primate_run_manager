@@ -9,10 +9,19 @@ ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/bouchet_sample_list_update.txt"
 LOCAL_RESULTS="/nfs/roberts/pi/pi_njl27/lt692/primate_results"
 ANALYSIS_ROOT="/nfs/roberts/pi/pi_njl27/lt692/primate_final_analysis"
 PIPELINE_WORK_ROOT="/nfs/roberts/scratch/pi_njl27/lt692/nf_work_dir_all_per_batch"
+# Required streaming references.  Fill these with the real Bouchet paths before
+# enabling submission; intentionally do not reuse another HPC's defaults.
+GLOBAL_REF_DIR=""
+REF_DIR=""
+NUCLEAR_ONLY_REF_DIR=""
 # Conservative first-deployment values. Increase PIPELINE_WAVE_SIZE to 50 and
 # CHAIN_CONCURRENT_BATCHES to 3 after the initial test.
 PIPELINE_WAVE_SIZE=50
 SAMPLE_CHAIN_CONCURRENCY=10
+# For a one-sample manager smoke test, temporarily set PIPELINE_WAVE_SIZE=1,
+# SAMPLE_CHAIN_CONCURRENCY=1, STREAM_SMOKE_TEST=1, and ENABLE_PIPELINE_SUBMIT=1.
+# Restore these conservative production-disabled values after the test.
+STREAM_SMOKE_TEST=0
 IMMEDIATE_SAMPLE_RETRIES=1
 IMMEDIATE_RETRY_DELAY_SECONDS=60
 CLEAN_VALIDATED_STAGE_WORK=1

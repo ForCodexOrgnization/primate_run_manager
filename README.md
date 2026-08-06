@@ -15,6 +15,19 @@ A **manager wave** is selected and tracked by this repository. A **pipeline batc
 
 Sample states include `PENDING`, the normal running states, `PIPELINE_DEFERRED_RETRY`, `PIPELINE_DEFERRED_RUNNING`, `PIPELINE_DEFERRED_FAILED`, transfer states, and the legacy-compatible `PIPELINE_RETRY_READY` / `PIPELINE_RETRY_RUNNING` states. Failed waves never blanket-fail their samples; strict output scanning evaluates each sample independently. Historical incomplete imports enter `PIPELINE_INCOMPLETE_REVIEW` and are never moved into the deferred queue automatically. Newly incomplete normal-wave samples enter `PIPELINE_DEFERRED_RETRY`; incomplete fresh retries become `PIPELINE_DEFERRED_FAILED` after `MAX_DEFERRED_RETRIES`.
 
+For streaming mode, `pipeline_attempts` counts manager submissions, including the
+initial submission. `MAX_DEFERRED_RETRIES=2` therefore permits at most two later
+manager deferred submissions. Worker-internal immediate retries and Slurm
+self-requeues do not increment this counter.
+
+Bouchet streaming submission remains disabled by default. Before a smoke test,
+the user must fill in the real Bouchet `GLOBAL_REF_DIR`, `REF_DIR`, and
+`NUCLEAR_ONLY_REF_DIR` paths in `config/bouchet.sh`; validation deliberately
+rejects missing or nonexistent directories. For a one-sample smoke test,
+temporarily use `PIPELINE_WAVE_SIZE=1`, `SAMPLE_CHAIN_CONCURRENCY=1`,
+`STREAM_SMOKE_TEST=1`, and only then `ENABLE_PIPELINE_SUBMIT=1`. Restore
+`ENABLE_PIPELINE_SUBMIT=0` after testing.
+
 ## State and migration
 
 `bin/initialize_samples.sh` is idempotent: existing rows remain, new assigned samples are appended, and samples are not duplicated. On first use, an old 10-column `state/sample_status.tsv` is copied to a timestamped `sample_status.tsv.bak.*` and atomically migrated to the 14-column schema. Wave state is in `state/wave_status.tsv`; validation details are in `state/output_validation.tsv`.

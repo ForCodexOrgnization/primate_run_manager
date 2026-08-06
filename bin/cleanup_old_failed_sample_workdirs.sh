@@ -20,9 +20,9 @@ while IFS=$'\t' read -r epoch sample status wave; do
  # Output validation wins over a stale failure marker.
  awk -F '\t' -v s="$sample" 'NR>1&&$1==s&&$8==1{ok=1}END{exit !ok}' "$VALIDATION_FILE" && continue
  state=$(sample_array_state "$sample"); slurm_state_is_active "$state" && continue
- [[ ! -s "${PIPELINE_WORK_ROOT}/.sample_state/${sample}.running.tsv" ]] || continue
- [[ ! -s "${PIPELINE_WORK_ROOT}/.sample_state/${sample}.requeue.tsv" ]] || continue
- [[ "$(marker_field "${PIPELINE_WORK_ROOT}/.sample_state/${sample}.failure.tsv" worker_state)" != IMMEDIATE_RETRY ]] || continue
+ failure_worker_state=$(marker_field "${PIPELINE_WORK_ROOT}/.sample_state/${sample}.failure.tsv" worker_state)
+ running_worker_state=$(marker_field "${PIPELINE_WORK_ROOT}/.sample_state/${sample}.running.tsv" worker_state 2>/dev/null || true)
+ [[ "$failure_worker_state" != IMMEDIATE_RETRY && "$running_worker_state" != IMMEDIATE_RETRY ]] || continue
  # The lock file is persistent metadata; only acquisition determines activity.
  exec {lock_fd}>"${PIPELINE_WORK_ROOT}/.locks/${sample}.lock"; flock -n "$lock_fd" || { exec {lock_fd}>&-; continue; }
  state2=$(sample_array_state "$sample"); if slurm_state_is_active "$state2"; then flock -u "$lock_fd"; exec {lock_fd}>&-; continue; fi

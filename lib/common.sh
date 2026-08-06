@@ -51,6 +51,7 @@ load_config() {
     : "${CLEAN_VALIDATED_STAGE_WORK:=1}" "${REMOVE_SAMPLE_ROOT_ON_SUCCESS:=1}"
     : "${FAILED_CACHE_CLEAN_TRIGGER_PERCENT:=70}" "${FAILED_CACHE_CLEAN_TARGET_PERCENT:=65}"
     : "${STREAM_PARTITION:=day}"
+    : "${STREAM_SMOKE_TEST:=0}"
     STATUS_FILE="${MANAGER_ROOT}/state/sample_status.tsv"
     WAVE_STATUS_FILE="${MANAGER_ROOT}/state/wave_status.tsv"
     TRANSFER_TASK_FILE="${MANAGER_ROOT}/state/transfer_tasks.tsv"
@@ -72,7 +73,17 @@ validate_config() {
     done
     [[ "$LOCAL_RESULTS" != "$ANALYSIS_ROOT" ]] || die "LOCAL_RESULTS and ANALYSIS_ROOT must differ"
     [[ -n "${SOURCE_ROOT:-}" && -n "${DEST_ROOT:-}" ]] || die "SOURCE_ROOT and DEST_ROOT must be non-empty"
-    for v in PIPELINE_WAVE_SIZE SAMPLE_CHAIN_CONCURRENCY IMMEDIATE_SAMPLE_RETRIES IMMEDIATE_RETRY_DELAY_SECONDS CLEAN_VALIDATED_STAGE_WORK REMOVE_SAMPLE_ROOT_ON_SUCCESS FAILED_CACHE_CLEAN_TRIGGER_PERCENT FAILED_CACHE_CLEAN_TARGET_PERCENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
+    if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+        for v in GLOBAL_REF_DIR REF_DIR NUCLEAR_ONLY_REF_DIR; do
+            [[ -n "${!v:-}" ]] || die "$v is required for PIPELINE_MODE=streaming_per_sample"
+            [[ -d "${!v}" ]] || die "$v directory does not exist: ${!v}"
+        done
+        [[ -n "${NEXTFLOW_MODULE:-}" ]] || command -v nextflow >/dev/null 2>&1 ||
+            die "NEXTFLOW_MODULE is required unless nextflow is already available"
+        [[ -n "${SAMTOOLS_MODULE:-}" ]] || command -v samtools >/dev/null 2>&1 ||
+            die "SAMTOOLS_MODULE is required unless samtools is already available"
+    fi
+    for v in PIPELINE_WAVE_SIZE SAMPLE_CHAIN_CONCURRENCY IMMEDIATE_SAMPLE_RETRIES IMMEDIATE_RETRY_DELAY_SECONDS CLEAN_VALIDATED_STAGE_WORK REMOVE_SAMPLE_ROOT_ON_SUCCESS STREAM_SMOKE_TEST FAILED_CACHE_CLEAN_TRIGGER_PERCENT FAILED_CACHE_CLEAN_TARGET_PERCENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
     if [[ "$PIPELINE_MODE" != streaming_per_sample ]]; then
@@ -84,7 +95,7 @@ validate_config() {
     for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT ENABLE_FULL_SCAN_IN_MANAGER_CYCLE ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE REQUIRE_SLURM_FOR_FULL_SCAN ALLOW_INTERACTIVE_FULL_SCAN ENABLE_INFRASTRUCTURE_RESUME REQUIRE_RESUME_FINGERPRINT_MATCH; do
         [[ "${!v}" == 0 || "${!v}" == 1 ]] || die "$v must be 0 or 1"
     done
-    for v in ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM; do
+    for v in ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM STREAM_SMOKE_TEST; do
         [[ "${!v}" == 0 || "${!v}" == 1 ]] || die "$v must be 0 or 1"
     done
     (( PATH_CHECK_MAX_FILES > 0 )) || die "PATH_CHECK_MAX_FILES must be greater than zero"
@@ -191,7 +202,21 @@ sample_array_state() {
     map=$(awk -F '\t' -v s="$sample" 'NR>1&&$4==s{line=$0}END{print line}' "${MANAGER_ROOT}/state/array_sample_map/"*.tsv 2>/dev/null || true)
     [[ -n "$map" ]] || return 0; job=$(cut -f2 <<<"$map"); task=$(cut -f3 <<<"$map")
     command -v sacct >/dev/null 2>&1 || return 0
-    sacct -n -j "${job}_${task}" --format=State --parsable2 2>/dev/null | awk -F '|' 'NR==1{sub(/ .*/,"",$1);sub(/\+$/, "", $1);print $1}'
+    sacct -n -j "${job}_${task}" --format=JobIDRaw,State --parsable2 2>/dev/null |
+        awk -F '|' -v wanted="${job}_${task}" '$1==wanted {sub(/ .*/,"",$2);sub(/\+$/, "", $2);print $2; exit}'
+}
+
+# pipeline_attempts includes the initial manager submission.  Thus a value of 2
+# permits at most two additional manager deferred submissions (attempts 2 and 3).
+# Worker self-requeues and immediate retries do not update pipeline_attempts.
+deferred_terminal_status() {
+    local wave_phase="$1" attempts="$2"
+    if [[ "$wave_phase" == DEFERRED_RETRY ]]; then
+        if (( attempts >= MAX_DEFERRED_RETRIES + 1 )); then printf '%s\n' PIPELINE_DEFERRED_FAILED
+        else printf '%s\n' PIPELINE_DEFERRED_RETRY; fi
+    else
+        printf '%s\n' PIPELINE_DEFERRED_RETRY
+    fi
 }
 normal_active_wave_count() { awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/&&$11!~/phase=DEFERRED_RETRY/{n++}END{print n+0}' "$WAVE_STATUS_FILE"; }
 determine_manager_phase() {

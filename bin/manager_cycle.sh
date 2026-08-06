@@ -13,10 +13,11 @@ elif [[ "$ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
     "${SCRIPT_DIR}/scan_active_results.sh" "$cfg"
 fi
 "${SCRIPT_DIR}/ingest_sample_markers.sh" "$cfg"
-determine_manager_phase
 "${SCRIPT_DIR}/archive_wave_failure_diagnostics.sh" "$cfg"
 "${SCRIPT_DIR}/archive_sample_failure_diagnostics.sh" "$cfg"
-"${SCRIPT_DIR}/cleanup_terminal_deferred_wave_workdirs.sh" "$cfg"
+if [[ "$PIPELINE_MODE" != streaming_per_sample ]]; then
+    "${SCRIPT_DIR}/cleanup_terminal_deferred_wave_workdirs.sh" "$cfg"
+fi
 work_used=$(work_disk_used_percent)
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]] && (( work_used >= FAILED_CACHE_CLEAN_TRIGGER_PERCENT )); then
     "${SCRIPT_DIR}/cleanup_old_failed_sample_workdirs.sh" "$cfg"

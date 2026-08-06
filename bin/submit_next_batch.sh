@@ -49,7 +49,7 @@ else
 fi
 log "INFO: retry_mode=$retry_mode"; log "INFO: retry_of_wave_id=$retry_of_wave_id"; log "INFO: original_work_root=$original_work_root"; log "INFO: selected_work_root=$work"; log "INFO: manifest_checksum_match=$manifest_match"; log "INFO: config_checksum_match=$config_match"; log "INFO: git_commit_match=$git_match"
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
- command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$PIPELINE_WORK_ROOT" "MAX_CONCURRENT=$SAMPLE_CHAIN_CONCURRENCY" "IMMEDIATE_SAMPLE_RETRIES=$IMMEDIATE_SAMPLE_RETRIES" "IMMEDIATE_RETRY_DELAY_SECONDS=$IMMEDIATE_RETRY_DELAY_SECONDS" "CLEAN_VALIDATED_STAGE_WORK=$CLEAN_VALIDATED_STAGE_WORK" "REMOVE_SAMPLE_ROOT_ON_SUCCESS=$REMOVE_SAMPLE_ROOT_ON_SUCCESS" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" "STREAM_PARTITION=$STREAM_PARTITION" "GLOBAL_REF_DIR=${GLOBAL_REF_DIR:-}" "REF_DIR=${REF_DIR:-}" "NUCLEAR_ONLY_REF_DIR=${NUCLEAR_ONLY_REF_DIR:-}" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" bash "$PIPELINE_LAUNCHER")
+ command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$PIPELINE_WORK_ROOT" "MAX_CONCURRENT=$SAMPLE_CHAIN_CONCURRENCY" "IMMEDIATE_SAMPLE_RETRIES=$IMMEDIATE_SAMPLE_RETRIES" "IMMEDIATE_RETRY_DELAY_SECONDS=$IMMEDIATE_RETRY_DELAY_SECONDS" "CLEAN_VALIDATED_STAGE_WORK=$CLEAN_VALIDATED_STAGE_WORK" "REMOVE_SAMPLE_ROOT_ON_SUCCESS=$REMOVE_SAMPLE_ROOT_ON_SUCCESS" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" "SAMTOOLS_MODULE=${SAMTOOLS_MODULE:-}" "STREAM_SMOKE_TEST=${STREAM_SMOKE_TEST:-0}" "STREAM_PARTITION=$STREAM_PARTITION" "GLOBAL_REF_DIR=${GLOBAL_REF_DIR:-}" "REF_DIR=${REF_DIR:-}" "NUCLEAR_ONLY_REF_DIR=${NUCLEAR_ONLY_REF_DIR:-}" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" bash "$PIPELINE_LAUNCHER")
 else
  command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$work" "PIPELINE_RESUME=$([[ "$retry_mode" == resume ]] && echo 1 || echo 0)" "RETRY_OF_WAVE_ID=$retry_of_wave_id" "ORIGINAL_WAVE_ID=$original_wave_id" "BATCH_LIST_DIR=$batch_lists" "BATCH_SIZE=$PIPELINE_BATCH_SIZE" "CHAIN_CONCURRENT_BATCHES=$CHAIN_CONCURRENT_BATCHES" "NUMT_CONCURRENT=$NUMT_CONCURRENT" "CLEAN_ON_SUCCESS=$CLEAN_ON_SUCCESS" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" bash "$PIPELINE_LAUNCHER")
 fi
@@ -70,7 +70,8 @@ if ((rc!=0)) || [[ -z "$job_id" ]]; then
 fi
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
  map_file="${MANAGER_ROOT}/state/array_sample_map/${wave_id}.tsv"
- { printf 'wave_id\tpipeline_job_id\tarray_task_id\tsample_id\treference_name\tsample_work_root\n'; i=0; while IFS=$'\t' read -r sample reference; do printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$wave_id" "$job_id" "$i" "$sample" "$reference" "$(sample_work_root "$sample")"; i=$((i+1)); done < "$wave_file"; } > "${map_file}.tmp.$$"
+ { printf 'wave_id\tpipeline_job_id\tarray_task_id\tsample_id\treference_name\tsample_work_root\n'; i=1; while IFS=$'\t' read -r sample reference; do printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$wave_id" "$job_id" "$i" "$sample" "$reference" "$(sample_work_root "$sample")"; i=$((i+1)); done < "$wave_file"; } > "${map_file}.tmp.$$"
+ awk -F '\t' 'NR==1{next} $3!=NR-1{bad=1} END{exit(bad || NR<2)}' "${map_file}.tmp.$$" || die "array_sample_map task IDs must start at 1 and increase continuously"
  mv "${map_file}.tmp.$$" "$map_file"; chmod a-w "$map_file" 2>/dev/null || true
 fi
 finalize_wave() {

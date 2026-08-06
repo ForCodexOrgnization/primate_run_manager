@@ -19,7 +19,7 @@ printf '88_0|FAILED|\n'
 S
 chmod +x "$T/mockbin/sacct"
 "$REPO/bin/update_wave_states.sh" "$T/config.sh"
-assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_RETRY_READY"{bad=1}$1=="s2"&&$4=="READY_TO_TRANSFER"{good=1}END{exit !(bad&&good)}' "$T/manager/state/sample_status.tsv"
+assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_DEFERRED_RETRY"{bad=1}$1=="s2"&&$4=="READY_TO_TRANSFER"{good=1}END{exit !(bad&&good)}' "$T/manager/state/sample_status.tsv"
 assert awk -F '\t' '$1=="wave_failed"&&$9=="PARTIAL_COMPLETE"{ok=1}END{exit !ok}' "$T/manager/state/wave_status.tsv"
 # An incomplete sample at the configured attempt limit becomes terminally failed.
 awk -F '\t' -v OFS='\t' 'NR==1{print;next}$1=="s3"{$4="PIPELINE_RETRY_RUNNING";$5="88";$6="wave_exhausted";$7=2}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"

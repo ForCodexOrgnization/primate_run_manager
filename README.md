@@ -13,7 +13,7 @@ manager wave (up to PIPELINE_WAVE_SIZE samples)
 
 A **manager wave** is selected and tracked by this repository. A **pipeline batch** is created internally by the pipeline launcher. For example, a 50-sample wave and batch size 5 results in one launcher invocation that creates ten internal batches—not ten manager invocations. Every wave has its own manifest, Nextflow work directory, batch-list directory, and Slurm array job ID.
 
-Sample states are `PENDING`, `WAVE_SUBMITTED`, `PIPELINE_RUNNING`, `PIPELINE_COMPLETE`, `PIPELINE_INCOMPLETE_REVIEW`, `PIPELINE_RETRY_READY`, `PIPELINE_RETRY_RUNNING`, `PIPELINE_FAILED`, `READY_TO_TRANSFER`, `TRANSFERRING`, `TRANSFERRED_FULL`, `TRANSFER_FAILED`, and `LOCAL_FINAL_RETAINED`. Failed waves never blanket-fail their samples; strict output scanning evaluates each sample independently. Historical incomplete imports enter `PIPELINE_INCOMPLETE_REVIEW` and are never retried without explicit approval (unless `AUTO_RETRY_IMPORTED_INCOMPLETE=1` is deliberately configured). Newly incomplete wave samples enter `PIPELINE_RETRY_READY` while attempts remain, then `PIPELINE_FAILED` at the retry limit.
+Sample states include `PENDING`, the normal running states, `PIPELINE_DEFERRED_RETRY`, `PIPELINE_DEFERRED_RUNNING`, `PIPELINE_DEFERRED_FAILED`, transfer states, and the legacy-compatible `PIPELINE_RETRY_READY` / `PIPELINE_RETRY_RUNNING` states. Failed waves never blanket-fail their samples; strict output scanning evaluates each sample independently. Historical incomplete imports enter `PIPELINE_INCOMPLETE_REVIEW` and are never moved into the deferred queue automatically. Newly incomplete normal-wave samples enter `PIPELINE_DEFERRED_RETRY`; incomplete fresh retries become `PIPELINE_DEFERRED_FAILED` after `MAX_DEFERRED_RETRIES`.
 
 ## State and migration
 
@@ -208,3 +208,18 @@ bash tests/run_tests.sh
 If self-requeue does not save the job and Slurm reaches an infrastructure terminal state (`TIMEOUT`, `PREEMPTED`, `NODE_FAIL`, or `BOOT_FAIL` by default), the manager records `failure_class=INFRASTRUCTURE`, `resume_eligible=1`, the wave work root, batch-list location, sample manifest checksum, pipeline config checksum, and pipeline git commit in `state/wave_status.tsv`. A fallback resume is a new manager wave, but it reuses the old Nextflow work root only when the retry manifest exactly matches the failed wave's manifest, the config checksum and git commit still match, no Slurm job from the old wave is active, and no other retry holds `${work_root}/.manager_resume.lock`.
 
 When those checks pass, the launcher receives `NF_BASE_WORK_DIR` pointing at the original work root, `PIPELINE_RESUME=1`, `RETRY_OF_WAVE_ID`, and `ORIGINAL_WAVE_ID`. When any check fails, the retry is a fresh manager wave with a new work root and `PIPELINE_RESUME=0`. Historical `PIPELINE_INCOMPLETE_REVIEW` samples remain excluded from automatic retry/resume unless explicitly approved; `AUTO_RETRY_IMPORTED_INCOMPLETE` remains disabled by default.
+# Two-phase, throughput-first scheduling
+
+The manager uses an automatically recomputed `NORMAL` / `DEFERRED_RETRY`
+phase.  During `NORMAL`, only new `PENDING` samples are submitted.  Incomplete
+samples from a terminal wave are recorded as `PIPELINE_DEFERRED_RETRY`; the
+manager archives bounded failure diagnostics and then safely removes the whole
+terminal wave work directory.  Once pending input and normal active waves are
+empty, deferred samples are retried together with a fresh work root and
+`PIPELINE_RESUME=0`.
+
+Slurm self-requeue states remain part of the original active wave and retain
+their cache.  They neither consume another pipeline attempt nor create a
+replacement wave.  The work filesystem is monitored independently from the
+results filesystem; stop, emergency-clean, and critical thresholds prevent new
+submission without ever removing active work.

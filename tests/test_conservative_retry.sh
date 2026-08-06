@@ -18,4 +18,6 @@ assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_RETRY_READY"{ok=1}END{exit !ok}' "$T
 assert grep -q $'^sample_id\tstatus\twave_id\tpipeline_attempts\tmissing_cram' "$T/manager/state/pipeline_incomplete_report.tsv"
 assert grep -q $'^s1\tPIPELINE_RETRY_READY' "$T/manager/state/pipeline_incomplete_report.tsv"
 "$REPO/bin/submit_next_batch.sh" "$T/config.sh" >/dev/null
-assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_RETRY_RUNNING"&&$7==1{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
+# Historical retry-ready rows remain compatible state, but are not mixed into
+# the automatic new-first/deferred queues.
+assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_RETRY_READY"&&$7==0{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"

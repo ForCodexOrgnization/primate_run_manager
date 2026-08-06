@@ -6,10 +6,13 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 load_config "${1:-}"; ensure_state_files; validate_config
 [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]] || { log "ENABLE_PIPELINE_SUBMIT=0"; exit 0; }
 (( $(active_wave_count) < MAX_ACTIVE_PIPELINE_WAVES )) || { log "Maximum active manager waves reached"; exit 0; }
+determine_manager_phase; phase=$(manager_phase)
+[[ "$phase" != PAUSED_DISK_PRESSURE ]] || { log "Pipeline submission paused by work filesystem pressure"; exit 0; }
 used=$(disk_used_percent); dirs=$(local_sample_dir_count)
-(( used < STOP_SUBMIT_PERCENT )) || { log "Disk ${used}% >= ${STOP_SUBMIT_PERCENT}%"; exit 0; }
+(( used < STOP_SUBMIT_PERCENT )) || { log "Results disk ${used}% >= ${STOP_SUBMIT_PERCENT}%"; exit 0; }
 (( dirs < MAX_LOCAL_SAMPLE_DIRS )) || { log "Local sample dirs ${dirs} >= ${MAX_LOCAL_SAMPLE_DIRS}"; exit 0; }
-mapfile -t samples < <(awk -F '\t' -v max="$MAX_PIPELINE_RETRIES" 'NR>1 && ($4=="PENDING" || ($4=="PIPELINE_RETRY_READY" && $7<max)) {print $1}' "$STATUS_FILE" | head -n "$PIPELINE_WAVE_SIZE")
+eligible=PENDING; [[ "$phase" == DEFERRED_RETRY ]] && eligible=PIPELINE_DEFERRED_RETRY
+mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR>1&&$4==s{print $1}' "$STATUS_FILE" | head -n "$PIPELINE_WAVE_SIZE")
 ((${#samples[@]})) || { log "No eligible samples"; exit 0; }
 seq_file="${MANAGER_ROOT}/state/wave_sequence"; exec 7>"${MANAGER_ROOT}/state/locks/wave_id.lock"; flock -x 7
 seq=0; [[ -s "$seq_file" ]] && read -r seq < "$seq_file"; seq=$((seq+1)); printf '%s\n' "$seq" > "${seq_file}.tmp.$$"; mv "${seq_file}.tmp.$$" "$seq_file"; flock -u 7
@@ -18,7 +21,7 @@ wave_file="${MANAGER_ROOT}/manifests/pipeline_waves/${wave_id}.samples.tsv"; sub
 for sample in "${samples[@]}"; do printf '%s\t%s\n' "$sample" "$(sample_species "$sample")"; done > "$wave_file"
 manifest_sha=$(file_sha256 "$wave_file"); config_sha=$(file_sha256 "$PIPELINE_CONFIG"); git_commit=$(git_commit_or_unknown)
 retry_mode=fresh; retry_of_wave_id=""; original_wave_id="$wave_id"; original_work_root=""; manifest_match=0; config_match=0; git_match=0
-if [[ "$ENABLE_INFRASTRUCTURE_RESUME" == 1 ]] && [[ $(awk -F '\t' 'NR>1&&$4=="PIPELINE_RETRY_READY"{n++}END{print n+0}' "$STATUS_FILE") -gt 0 ]]; then
+if [[ "$phase" == NORMAL && "$ENABLE_INFRASTRUCTURE_RESUME" == 1 ]] && [[ $(awk -F '\t' 'NR>1&&$4=="PIPELINE_RETRY_READY"{n++}END{print n+0}' "$STATUS_FILE") -gt 0 ]]; then
     old_wave=$(latest_failed_wave_for_samples "$wave_file")
     if [[ -n "$old_wave" ]]; then
         old_manifest=$(wave_field "$old_wave" sample_manifest); original_work_root=$(wave_field "$old_wave" work_root)
@@ -41,10 +44,10 @@ command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUN
 created=$(now_iso); batch_sha=unknown
 if [[ "$DRY_RUN" == 1 ]]; then
     printf 'DRY RUN: '; printf '%q ' "${command[@]}"; printf '\n'
-    with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\tDRY_RUN\t0\t0\tCANCELLED\t$created\tdry run; launcher not invoked\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
+    with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\tDRY_RUN\t0\t0\tCANCELLED\t$created\tdry run; phase=$phase; launcher not invoked\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
     exit 0
 fi
-with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\t\t0\t0\tCREATED\t$created\tlauncher starting\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
+with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\t\t0\t0\tCREATED\t$created\tlauncher starting; phase=$phase\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
 set +e; "${command[@]}" > >(tee "$submit_log") 2>&1; rc=$?; set -e
 job_id=$(sed -n 's/.*Submitted batch job \([0-9][0-9]*\).*/\1/p' "$submit_log" | tail -n 1)
 if ((rc!=0)) || [[ -z "$job_id" ]]; then
@@ -53,9 +56,9 @@ if ((rc!=0)) || [[ -z "$job_id" ]]; then
     log "$note"; exit 1
 fi
 finalize_wave() {
-    update_wave_row "$wave_id" "pipeline_job_id=$job_id" "status=SUBMITTED" "slurm_state=PENDING" "notes=submitted"
+    update_wave_row "$wave_id" "pipeline_job_id=$job_id" "status=SUBMITTED" "slurm_state=PENDING" "notes=submitted; phase=$phase"
     local s attempts previous next_status
-    for s in "${samples[@]}"; do previous=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); next_status=WAVE_SUBMITTED; [[ "$previous" == PIPELINE_RETRY_READY ]] && next_status=PIPELINE_RETRY_RUNNING; attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=$next_status" "slurm_job_id=$job_id" "wave_id=$wave_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=manager wave submitted"; done
+    for s in "${samples[@]}"; do previous=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); next_status=WAVE_SUBMITTED; [[ "$previous" == PIPELINE_DEFERRED_RETRY ]] && next_status=PIPELINE_DEFERRED_RUNNING; attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=$next_status" "slurm_job_id=$job_id" "wave_id=$wave_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=manager wave submitted; phase=$phase"; done
 }
 with_state_lock finalize_wave
 log "Submitted wave $wave_id (${#samples[@]} samples) as Slurm job $job_id"

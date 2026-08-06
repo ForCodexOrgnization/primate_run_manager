@@ -5,9 +5,9 @@ PIPELINE_REPO="/home/lt692/ycga_work/primate_mt_variant_calling"
 PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_all_per_batch.sh"
 PIPELINE_CONFIG="${PIPELINE_REPO}/nextflow_mcc.config"
 ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/mcc_sample_list_update.txt"
-LOCAL_RESULTS="/vast/palmer/scratch/lake_nicole/lt692/primate_results"
+LOCAL_RESULTS="/home/lt692/ycga_work/primate_results"
 ANALYSIS_ROOT="/vast/palmer/scratch/lake_nicole/lt692/primate_final_analysis"
-PIPELINE_WORK_ROOT="/home/lt692/ycga_work/nf_work_dir_all_per_batch"
+PIPELINE_WORK_ROOT="/vast/palmer/scratch/lake_nicole/lt692/nf_work_dir_all_per_batch"
 # Conservative first-deployment values. Increase PIPELINE_WAVE_SIZE to 50 and
 # CHAIN_CONCURRENT_BATCHES to 3 after the initial test.
 PIPELINE_WAVE_SIZE=20
@@ -30,8 +30,8 @@ EMERGENCY_PERCENT=85
 MAX_LOCAL_SAMPLE_DIRS=180
 TRANSFER_BATCH_SIZE=25
 SOURCE_COLLECTION="fa56d2d4-adfd-4f1e-b735-5f28bde144d7"
-SOURCE_ROOT="/vast/palmer/scratch/lake_nicole/lt692/primate_results"
-SOURCE_ROOT_LOCAL_VIEW="/vast/palmer/scratch/lake_nicole/lt692/primate_results"
+SOURCE_ROOT="/home/lt692/ycga_work/primate_results"
+SOURCE_ROOT_LOCAL_VIEW="/home/lt692/ycga_work/primate_results"
 DEST_COLLECTION="3f8ab775-c5e9-4280-849f-766ac428c358"
 DEST_ROOT="/primate_results/"
 GLOBUS_SYNC_LEVEL="checksum"

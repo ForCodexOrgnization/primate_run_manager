@@ -38,22 +38,40 @@ if [[ "$phase" == NORMAL && "$ENABLE_INFRASTRUCTURE_RESUME" == 1 ]] && [[ $(awk 
     fi
 fi
 work="${PIPELINE_WORK_ROOT}/${wave_id}"; [[ "$retry_mode" == resume ]] && work="$original_work_root"
-batch_lists="${work}/batch_lists"; mkdir -p "$batch_lists"
+work_layout=WAVE_ROOT; batch_lists="${work}/batch_lists"
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+    # A wave is only immutable scheduling metadata.  Workers always derive their
+    # persistent directory as NF_BASE_WORK_DIR/sample_id.
+    work="$PIPELINE_WORK_ROOT"; work_layout=PER_SAMPLE; batch_lists=""
+    for sample in "${samples[@]}"; do safe_sample_id "$sample" || die "unsafe sample ID: $sample"; done
+else
+    mkdir -p "$batch_lists"
+fi
 log "INFO: retry_mode=$retry_mode"; log "INFO: retry_of_wave_id=$retry_of_wave_id"; log "INFO: original_work_root=$original_work_root"; log "INFO: selected_work_root=$work"; log "INFO: manifest_checksum_match=$manifest_match"; log "INFO: config_checksum_match=$config_match"; log "INFO: git_commit_match=$git_match"
-command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$work" "PIPELINE_RESUME=$([[ "$retry_mode" == resume ]] && echo 1 || echo 0)" "RETRY_OF_WAVE_ID=$retry_of_wave_id" "ORIGINAL_WAVE_ID=$original_wave_id" "BATCH_LIST_DIR=$batch_lists" "BATCH_SIZE=$PIPELINE_BATCH_SIZE" "CHAIN_CONCURRENT_BATCHES=$CHAIN_CONCURRENT_BATCHES" "NUMT_CONCURRENT=$NUMT_CONCURRENT" "CLEAN_ON_SUCCESS=$CLEAN_ON_SUCCESS" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" bash "$PIPELINE_LAUNCHER")
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+ command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$PIPELINE_WORK_ROOT" "MAX_CONCURRENT=$SAMPLE_CHAIN_CONCURRENCY" "IMMEDIATE_SAMPLE_RETRIES=$IMMEDIATE_SAMPLE_RETRIES" "IMMEDIATE_RETRY_DELAY_SECONDS=$IMMEDIATE_RETRY_DELAY_SECONDS" "CLEAN_VALIDATED_STAGE_WORK=$CLEAN_VALIDATED_STAGE_WORK" "REMOVE_SAMPLE_ROOT_ON_SUCCESS=$REMOVE_SAMPLE_ROOT_ON_SUCCESS" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" "STREAM_PARTITION=$STREAM_PARTITION" "GLOBAL_REF_DIR=${GLOBAL_REF_DIR:-}" "REF_DIR=${REF_DIR:-}" "NUCLEAR_ONLY_REF_DIR=${NUCLEAR_ONLY_REF_DIR:-}" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" bash "$PIPELINE_LAUNCHER")
+else
+ command=(env "FULL_SAMPLE_LIST=$wave_file" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND1_OUTDIR=$LOCAL_RESULTS" "NF_BASE_WORK_DIR=$work" "PIPELINE_RESUME=$([[ "$retry_mode" == resume ]] && echo 1 || echo 0)" "RETRY_OF_WAVE_ID=$retry_of_wave_id" "ORIGINAL_WAVE_ID=$original_wave_id" "BATCH_LIST_DIR=$batch_lists" "BATCH_SIZE=$PIPELINE_BATCH_SIZE" "CHAIN_CONCURRENT_BATCHES=$CHAIN_CONCURRENT_BATCHES" "NUMT_CONCURRENT=$NUMT_CONCURRENT" "CLEAN_ON_SUCCESS=$CLEAN_ON_SUCCESS" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" "NF_CONFIG_FILE=$PIPELINE_CONFIG" "NEXTFLOW_MODULE=${NEXTFLOW_MODULE:-}" bash "$PIPELINE_LAUNCHER")
+fi
 created=$(now_iso); batch_sha=unknown
+layout_column=""; [[ "$PIPELINE_MODE" == streaming_per_sample ]] && layout_column=$'\t'"$work_layout"
 if [[ "$DRY_RUN" == 1 ]]; then
     printf 'DRY RUN: '; printf '%q ' "${command[@]}"; printf '\n'
-    with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\tDRY_RUN\t0\t0\tCANCELLED\t$created\tdry run; phase=$phase; launcher not invoked\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
+    with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\tDRY_RUN\t0\t0\tCANCELLED\t$created\tdry run; phase=$phase; launcher not invoked\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha$layout_column"
     exit 0
 fi
-with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\t\t0\t0\tCREATED\t$created\tlauncher starting; phase=$phase\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha"
+with_state_lock append_wave_row "$wave_id\t$wave_file\t${#samples[@]}\t\t$created\t\t0\t0\tCREATED\t$created\tlauncher starting; phase=$phase\t$work\t$retry_of_wave_id\t$original_wave_id\t\t0\t$manifest_sha\t$config_sha\t$git_commit\t$batch_lists\t$batch_sha$layout_column"
 set +e; "${command[@]}" > >(tee "$submit_log") 2>&1; rc=$?; set -e
 job_id=$(sed -n 's/.*Submitted batch job \([0-9][0-9]*\).*/\1/p' "$submit_log" | tail -n 1)
 if ((rc!=0)) || [[ -z "$job_id" ]]; then
     note="launcher failed rc=$rc${job_id:+ job=$job_id}; see $submit_log"
     with_state_lock update_wave_row "$wave_id" "status=FAILED" "slurm_state=SUBMIT_FAILED" "notes=$note"
     log "$note"; exit 1
+fi
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+ map_file="${MANAGER_ROOT}/state/array_sample_map/${wave_id}.tsv"
+ { printf 'wave_id\tpipeline_job_id\tarray_task_id\tsample_id\treference_name\tsample_work_root\n'; i=0; while IFS=$'\t' read -r sample reference; do printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$wave_id" "$job_id" "$i" "$sample" "$reference" "$(sample_work_root "$sample")"; i=$((i+1)); done < "$wave_file"; } > "${map_file}.tmp.$$"
+ mv "${map_file}.tmp.$$" "$map_file"; chmod a-w "$map_file" 2>/dev/null || true
 fi
 finalize_wave() {
     update_wave_row "$wave_id" "pipeline_job_id=$job_id" "status=SUBMITTED" "slurm_state=PENDING" "notes=submitted; phase=$phase"

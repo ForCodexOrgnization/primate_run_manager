@@ -19,7 +19,7 @@ load_globus_module() {
 }
 
 state_header() { printf 'sample_id\tspecies\thpc\tstatus\tslurm_job_id\twave_id\tpipeline_attempts\tlast_pipeline_error\tglobus_task_id\tworkspace_path\ttransfer_status\tcleanup_status\tlast_update\tnotes\n'; }
-wave_header() { printf 'wave_id\tsample_manifest\tsample_count\tpipeline_job_id\tsubmit_time\tslurm_state\tcomplete_count\tincomplete_count\tstatus\tlast_update\tnotes\twork_root\tretry_of_wave_id\toriginal_wave_id\tfailure_class\tresume_eligible\tpipeline_manifest_sha256\tpipeline_config_sha256\tpipeline_git_commit\tbatch_lists_dir\tbatch_manifest_sha256\n'; }
+wave_header() { printf 'wave_id\tsample_manifest\tsample_count\tpipeline_job_id\tsubmit_time\tslurm_state\tcomplete_count\tincomplete_count\tstatus\tlast_update\tnotes\twork_root\tretry_of_wave_id\toriginal_wave_id\tfailure_class\tresume_eligible\tpipeline_manifest_sha256\tpipeline_config_sha256\tpipeline_git_commit\tbatch_lists_dir\tbatch_manifest_sha256'; [[ "${PIPELINE_MODE:-legacy_batch}" == streaming_per_sample ]] && printf '\twork_layout'; printf '\n'; }
 transfer_header() { printf 'batch_id\ttask_id\tstatus\tsample_file\tsubmit_time\tlast_update\tnotes\n'; }
 validation_header() { printf 'sample_id\tcram_ok\tcrai_ok\tvcf_ok\tround2_coverage_ok\tnumt_coverage_ok\tmtcn_ok\toverall_complete\tscan_time\tnotes\tcram_size\tcram_mtime\tcrai_size\tcrai_mtime\tvcf_size\tvcf_mtime\tround2_coverage_size\tround2_coverage_mtime\tnumt_coverage_size\tnumt_coverage_mtime\tmtcn_size\tmtcn_mtime\n'; }
 
@@ -46,6 +46,11 @@ load_config() {
     : "${WORK_EMERGENCY_CLEAN_PERCENT:=82}" "${WORK_CRITICAL_PERCENT:=90}"
     : "${ENABLE_ORPHAN_WORK_CLEANUP:=1}" "${ORPHAN_WORK_RETENTION_HOURS:=48}"
     : "${MAX_DIAGNOSTIC_LOG_LINES:=5000}" "${MAX_DIAGNOSTIC_FILE_BYTES:=10485760}"
+    : "${PIPELINE_MODE:=legacy_batch}" "${SAMPLE_CHAIN_CONCURRENCY:=10}"
+    : "${IMMEDIATE_SAMPLE_RETRIES:=1}" "${IMMEDIATE_RETRY_DELAY_SECONDS:=60}"
+    : "${CLEAN_VALIDATED_STAGE_WORK:=1}" "${REMOVE_SAMPLE_ROOT_ON_SUCCESS:=1}"
+    : "${FAILED_CACHE_CLEAN_TRIGGER_PERCENT:=70}" "${FAILED_CACHE_CLEAN_TARGET_PERCENT:=65}"
+    : "${STREAM_PARTITION:=day}"
     STATUS_FILE="${MANAGER_ROOT}/state/sample_status.tsv"
     WAVE_STATUS_FILE="${MANAGER_ROOT}/state/wave_status.tsv"
     TRANSFER_TASK_FILE="${MANAGER_ROOT}/state/transfer_tasks.tsv"
@@ -54,7 +59,8 @@ load_config() {
     WAVE_FAILURE_FILE="${MANAGER_ROOT}/state/wave_failures.tsv"
     MANAGER_RUNTIME_ROOT="${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}"
     RUNTIME_LOG_DIR="${RUNTIME_LOG_DIR:-${MANAGER_RUNTIME_ROOT}/logs}"
-    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/receipts/deferred_wave_work_cleanup,state/failure_diagnostics,manifests/pipeline_waves,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
+    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/array_sample_map,state/receipts/deferred_wave_work_cleanup,state/receipts/failed_sample_work_cleanup,state/failure_diagnostics/samples,manifests/pipeline_waves,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
+    [[ "$PIPELINE_MODE" != streaming_per_sample ]] || mkdir -p "$PIPELINE_WORK_ROOT"/{.sample_state,.locks,.manifests}
 }
 
 validate_config() {
@@ -66,9 +72,12 @@ validate_config() {
     done
     [[ "$LOCAL_RESULTS" != "$ANALYSIS_ROOT" ]] || die "LOCAL_RESULTS and ANALYSIS_ROOT must differ"
     [[ -n "${SOURCE_ROOT:-}" && -n "${DEST_ROOT:-}" ]] || die "SOURCE_ROOT and DEST_ROOT must be non-empty"
-    for v in PIPELINE_WAVE_SIZE PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
+    for v in PIPELINE_WAVE_SIZE SAMPLE_CHAIN_CONCURRENCY IMMEDIATE_SAMPLE_RETRIES IMMEDIATE_RETRY_DELAY_SECONDS CLEAN_VALIDATED_STAGE_WORK REMOVE_SAMPLE_ROOT_ON_SUCCESS FAILED_CACHE_CLEAN_TRIGGER_PERCENT FAILED_CACHE_CLEAN_TARGET_PERCENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
+    if [[ "$PIPELINE_MODE" != streaming_per_sample ]]; then
+      for v in PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT; do [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"; done
+    fi
     for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS ENABLE_FULL_SCAN_IN_MANAGER_CYCLE ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE REQUIRE_SLURM_FOR_FULL_SCAN ALLOW_INTERACTIVE_FULL_SCAN ENABLE_INFRASTRUCTURE_RESUME REQUIRE_RESUME_FINGERPRINT_MATCH ENABLE_DEFERRED_RETRY MAX_DEFERRED_RETRIES CLEAN_TERMINAL_DEFERRED_WORK ARCHIVE_FAILURE_DIAGNOSTICS WORK_STOP_SUBMIT_PERCENT WORK_EMERGENCY_CLEAN_PERCENT WORK_CRITICAL_PERCENT ENABLE_ORPHAN_WORK_CLEANUP ORPHAN_WORK_RETENTION_HOURS MAX_DIAGNOSTIC_LOG_LINES MAX_DIAGNOSTIC_FILE_BYTES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
@@ -85,6 +94,7 @@ validate_config() {
     (( STOP_SUBMIT_PERCENT <= FORCE_TRANSFER_PERCENT )) || die "STOP_SUBMIT_PERCENT must be <= FORCE_TRANSFER_PERCENT"
     (( FORCE_TRANSFER_PERCENT <= EMERGENCY_PERCENT )) || die "FORCE_TRANSFER_PERCENT must be <= EMERGENCY_PERCENT"
     (( WORK_STOP_SUBMIT_PERCENT <= WORK_EMERGENCY_CLEAN_PERCENT && WORK_EMERGENCY_CLEAN_PERCENT <= WORK_CRITICAL_PERCENT && WORK_CRITICAL_PERCENT <= 100 )) || die "work disk thresholds must be monotonic and <= 100"
+    (( FAILED_CACHE_CLEAN_TARGET_PERCENT < FAILED_CACHE_CLEAN_TRIGGER_PERCENT && FAILED_CACHE_CLEAN_TRIGGER_PERCENT <= WORK_CRITICAL_PERCENT )) || die "failed-cache target must be below trigger and trigger <= critical"
     case "${GLOBUS_SYNC_LEVEL:-}" in exists|size|mtime|checksum) ;; *) die "GLOBUS_SYNC_LEVEL must be one of: exists size mtime checksum" ;; esac
     if [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]]; then command -v sbatch >/dev/null || die "sbatch not found"; fi
     if [[ "$ENABLE_TRANSFER" == 1 && "$DRY_RUN" == 0 ]]; then load_globus_module; fi
@@ -115,11 +125,16 @@ migrate_wave_state_file() {
     [[ -e "$WAVE_STATUS_FILE" ]] || { wave_header > "$WAVE_STATUS_FILE"; return; }
     local fields backup tmp
     fields=$(awk -F '\t' 'NR==1{print NF}' "$WAVE_STATUS_FILE")
-    [[ "$fields" == 21 ]] && return
+    [[ "$fields" == 22 ]] && return
+    if [[ "$fields" == 21 && "${PIPELINE_MODE:-legacy_batch}" != streaming_per_sample ]]; then return; fi
+    if [[ "$fields" == 21 ]]; then
+      backup="${WAVE_STATUS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ).$$"; cp -p "$WAVE_STATUS_FILE" "$backup"; tmp="${WAVE_STATUS_FILE}.tmp.$$"
+      { wave_header; awk -F '\t' -v OFS='\t' 'NR>1{print $0,"WAVE_ROOT"}' "$WAVE_STATUS_FILE"; } > "$tmp"; mv "$tmp" "$WAVE_STATUS_FILE"; return
+    fi
     [[ "$fields" == 11 ]] || die "Unsupported wave state schema ($fields columns): $WAVE_STATUS_FILE"
     backup="${WAVE_STATUS_FILE}.bak.$(date -u +%Y%m%dT%H%M%SZ).$$"; cp -p "$WAVE_STATUS_FILE" "$backup"
     tmp="${WAVE_STATUS_FILE}.tmp.$$"
-    { wave_header; awk -F '\t' -v OFS='\t' 'NR>1 { print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,"","",$1,"",0,"unknown","unknown","unknown","","unknown" }' "$WAVE_STATUS_FILE"; } > "$tmp"
+    { wave_header; awk -F '\t' -v OFS='\t' 'NR>1 { print $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,"","",$1,"",0,"unknown","unknown","unknown","","unknown","WAVE_ROOT" }' "$WAVE_STATUS_FILE"; } > "$tmp"
     mv "$tmp" "$WAVE_STATUS_FILE"; log "Migrated wave state; backup: $backup"
 }
 ensure_wave_state_file() { with_state_lock migrate_wave_state_file; }
@@ -168,12 +183,22 @@ get_samples_by_status() { local regex="$1"; awk -F '\t' -v r="$regex" 'NR>1 && $
 sample_species() { local sample="$1"; awk -F '\t' -v s="$sample" 'NR>1&&$1==s{print $2;exit}' "$STATUS_FILE"; }
 disk_used_percent() { df -P "$DISK_CHECK_PATH" | awk 'NR==2{gsub(/%/,"",$5);print $5}'; }
 work_disk_used_percent() { df -P "$WORK_DISK_CHECK_PATH" | awk 'NR==2{gsub(/%/,"",$5);print $5}'; }
+safe_sample_id() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [[ "$1" != . && "$1" != .. && "$1" != .sample_state && "$1" != .locks && "$1" != .manifests ]]; }
+sample_work_root() { safe_sample_id "$1" || die "unsafe sample ID: $1"; printf '%s/%s\n' "${PIPELINE_WORK_ROOT%/}" "$1"; }
+marker_field() { local file="$1" field="$2"; awk -F '\t' -v f="$field" 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next} NR==2{if(h[f])print $h[f];exit}' "$file"; }
+sample_array_state() {
+    local sample="$1" map job task
+    map=$(awk -F '\t' -v s="$sample" 'NR>1&&$4==s{line=$0}END{print line}' "${MANAGER_ROOT}/state/array_sample_map/"*.tsv 2>/dev/null || true)
+    [[ -n "$map" ]] || return 0; job=$(cut -f2 <<<"$map"); task=$(cut -f3 <<<"$map")
+    command -v sacct >/dev/null 2>&1 || return 0
+    sacct -n -j "${job}_${task}" --format=State --parsable2 2>/dev/null | awk -F '|' 'NR==1{sub(/ .*/,"",$1);sub(/\+$/, "", $1);print $1}'
+}
 normal_active_wave_count() { awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/&&$11!~/phase=DEFERRED_RETRY/{n++}END{print n+0}' "$WAVE_STATUS_FILE"; }
 determine_manager_phase() {
     local used pending active deferred phase reason tmp
     used=$(work_disk_used_percent); pending=$(awk -F '\t' 'NR>1&&$4=="PENDING"{n++}END{print n+0}' "$STATUS_FILE")
     active=$(normal_active_wave_count); deferred=$(awk -F '\t' 'NR>1&&$4=="PIPELINE_DEFERRED_RETRY"{n++}END{print n+0}' "$STATUS_FILE")
-    if (( used >= WORK_STOP_SUBMIT_PERCENT )); then phase=PAUSED_DISK_PRESSURE; reason="work filesystem ${used}%";
+    if (( used >= WORK_CRITICAL_PERCENT )); then phase=PAUSED_DISK_PRESSURE; reason="critical work filesystem ${used}%";
     elif (( pending > 0 || active > 0 )); then phase=NORMAL; reason="new samples or normal wave active";
     elif (( deferred > 0 && ENABLE_DEFERRED_RETRY == 1 )); then phase=DEFERRED_RETRY; reason="pending empty; deferred work available";
     else phase=NORMAL; reason="idle"; fi

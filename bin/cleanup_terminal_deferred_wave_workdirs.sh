@@ -2,6 +2,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
 load_config "${1:-}"; ensure_state_files
+[[ "$PIPELINE_MODE" != streaming_per_sample ]] || exit 0
 [[ "$CLEAN_TERMINAL_DEFERRED_WORK" == 1 && "$DRY_RUN" == 0 ]] || exit 0
 while IFS=$'\t' read -r wave manifest work job; do
  [[ -n "$wave" && -n "$work" ]] || continue

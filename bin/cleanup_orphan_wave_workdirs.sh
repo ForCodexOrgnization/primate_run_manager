@@ -2,6 +2,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
 load_config "${1:-}"; ensure_state_files
+[[ "$PIPELINE_MODE" != streaming_per_sample ]] || exit 0
 mode=${2:---dry-run}; [[ "$mode" == --dry-run || "$mode" == --apply ]] || die "usage: $0 CONFIG [--dry-run|--apply]"
 [[ "$ENABLE_ORPHAN_WORK_CLEANUP" == 1 ]] || exit 0
 root=$(realpath -m "$PIPELINE_WORK_ROOT"); [[ "$root" != / ]] || die "PIPELINE_WORK_ROOT may not be /"

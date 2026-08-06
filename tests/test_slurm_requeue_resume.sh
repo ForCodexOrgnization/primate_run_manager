@@ -18,7 +18,7 @@ assert awk -F '\t' -v w="$wave" 'NR>1&&$1==w&&$9~/^(SUBMITTED|RUNNING)$/&&$6=="R
 assert test "$(awk -F '\t' '$4~/^(WAVE_SUBMITTED|PIPELINE_RUNNING)$/&&$7==1{n++}END{print n+0}' "$T/manager/state/sample_status.tsv")" -eq 2
 "$REPO/bin/submit_next_batch.sh" "$T/config.sh" >/dev/null 2>"$T/submit_requeued.err"
 assert test "$(wc -l < "$T/invocations")" -eq 1
-# TIMEOUT is infrastructure/resume eligible and later retry with same full manifest reuses work root.
+# TIMEOUT is terminal: it is deferred and later receives a fresh work root.
 cat > "$T/mockbin/sacct" <<'S'
 #!/usr/bin/env bash
 printf '123456_0|TIMEOUT\n'
@@ -26,11 +26,13 @@ S
 chmod +x "$T/mockbin/sacct"
 "$REPO/bin/update_wave_states.sh" "$T/config.sh" >/dev/null || true
 assert awk -F '\t' -v w="$wave" 'NR>1&&$1==w&&$15=="INFRASTRUCTURE"&&$16==1{ok=1}END{exit !ok}' "$T/manager/state/wave_status.tsv"
-assert test "$(awk -F '\t' '$4=="PIPELINE_RETRY_READY"{n++}END{print n+0}' "$T/manager/state/sample_status.tsv")" -eq 2
+assert test "$(awk -F '\t' '$4=="PIPELINE_DEFERRED_RETRY"{n++}END{print n+0}' "$T/manager/state/sample_status.tsv")" -eq 2
+# Drain the remaining new sample before deferred work is eligible.
+awk -F '\t' -v OFS='\t' '$1=="s3"{$4="READY_TO_TRANSFER"}{print}' "$T/manager/state/sample_status.tsv" > "$T/state.tmp"; mv "$T/state.tmp" "$T/manager/state/sample_status.tsv"
 "$REPO/bin/submit_next_batch.sh" "$T/config.sh" >/dev/null 2>"$T/submit2.err"
-assert grep -q "INFO: retry_mode=resume" "$T/submit2.err"
-assert awk -F '\t' -v old="$wave" -v work="$work" 'NR>1&&$13==old&&$12==work{ok=1}END{exit !ok}' "$T/manager/state/wave_status.tsv"
-assert grep -q $'5\t1\t'"$work"$'\tNextflow/test' "$T/invocations"
+assert grep -q "INFO: retry_mode=fresh" "$T/submit2.err"
+assert awk -F '\t' -v work="$work" 'NR>2&&$12!=work&&$11~/phase=DEFERRED_RETRY/{ok=1}END{exit !ok}' "$T/manager/state/wave_status.tsv"
+assert grep -q $'5\t1\t.*/wave_.*\tNextflow/test' "$T/invocations"
 # FAILED is not resume eligible.
 new_env; printf 'config\n' > "$T/test.config"; "$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null; "$REPO/bin/submit_next_batch.sh" "$T/config.sh" >/dev/null 2>&1
 cat > "$T/mockbin/sacct" <<'S'

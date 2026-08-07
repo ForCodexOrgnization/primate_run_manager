@@ -3,6 +3,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR}/../lib/common.sh"
 load_config "${1:-}"; ensure_state_files
 command -v sacct >/dev/null 2>&1 || { log "sacct unavailable; wave states unchanged"; exit 0; }
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+  # Submission rows are audit metadata only. Individual lifecycle transitions
+  # are exclusively owned by ingest_sample_markers.sh.
+  while IFS=$'\t' read -r submission job expected; do
+    [[ -n "$job" ]] || continue
+    states=$(sacct -n -j "$job" --format=JobIDRaw,State --parsable2 2>/dev/null | awk -F '|' -v j="$job" '$1 ~ ("^"j"_[0-9]+$"){sub(/ .*/,"",$2);sub(/\+$/,"",$2);if($2!="")print $2}')
+    [[ -n "$states" ]] || continue
+    count=$(wc -l <<<"$states"); active=$(awk '$1~/^(PENDING|CONFIGURING|RUNNING|COMPLETING|REQUEUED|RESIZING|SUSPENDED)$/{n++}END{print n+0}' <<<"$states")
+    if (( active > 0 )); then with_state_lock update_wave_row "$submission" status=RUNNING slurm_state=ACTIVE
+    elif (( count >= expected )); then with_state_lock update_wave_row "$submission" status=COMPLETE slurm_state=TERMINAL
+    fi
+  done < <(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print $1"\t"$4"\t"$3}' "$WAVE_STATUS_FILE")
+  exit 0
+fi
 mapfile -t waves < <(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print $1"\t"$4}' "$WAVE_STATUS_FILE")
 for entry in "${waves[@]}"; do
  wave=${entry%%$'\t'*}; job=${entry#*$'\t'}; [[ -n "$job" ]] || continue

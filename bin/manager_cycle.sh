@@ -6,12 +6,15 @@ cfg="${1:-${RUN_MANAGER_CONFIG:-}}"; [[ -s "$cfg" ]] || die "Config missing"
 MANAGER_ROOT=$(bash -c 'source "$1"; printf "%s" "$MANAGER_ROOT"' _ "$cfg")
 mkdir -p "$MANAGER_ROOT/state/locks"; exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8 || { log "Another manager cycle is active"; exit 0; }
 load_config "$cfg"; ensure_state_files; validate_config
+# In streaming mode this updates submission audit metadata only; it never gates
+# per-sample reconciliation or transfer readiness.
 "${SCRIPT_DIR}/update_wave_states.sh" "$cfg"
 if [[ "$ENABLE_FULL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
     "${SCRIPT_DIR}/scan_results.sh" "$cfg"
 elif [[ "$ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
     "${SCRIPT_DIR}/scan_active_results.sh" "$cfg"
 fi
+# Exact array elements are reconciled before transfer and new submission work.
 "${SCRIPT_DIR}/ingest_sample_markers.sh" "$cfg"
 "${SCRIPT_DIR}/archive_wave_failure_diagnostics.sh" "$cfg"
 "${SCRIPT_DIR}/archive_sample_failure_diagnostics.sh" "$cfg"

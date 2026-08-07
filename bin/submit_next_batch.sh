@@ -5,18 +5,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/common.sh"
 load_config "${1:-}"; validate_config; ensure_state_files
 [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]] || { log "ENABLE_PIPELINE_SUBMIT=0"; exit 0; }
-(( $(active_wave_count) < MAX_ACTIVE_PIPELINE_WAVES )) || { log "Maximum active manager waves reached"; exit 0; }
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+    # A second independently throttled array could exceed the global sample
+    # concurrency.  Keep at most one active streaming submission.
+    streaming_active=$(awk -F '\t' 'NR>1&&$4~/^(WAVE_SUBMITTED|PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_DEFERRED_RUNNING)$/{n++}END{print n+0}' "$STATUS_FILE")
+    (( streaming_active == 0 )) || { log "Active streaming sample tasks already own the global concurrency budget"; exit 0; }
+else
+    (( $(active_wave_count) < MAX_ACTIVE_PIPELINE_WAVES )) || { log "Maximum active manager waves reached"; exit 0; }
+fi
 determine_manager_phase; phase=$(manager_phase)
 [[ "$phase" != PAUSED_DISK_PRESSURE ]] || { log "Pipeline submission paused by work filesystem pressure"; exit 0; }
 used=$(disk_used_percent); dirs=$(local_sample_dir_count)
 (( used < STOP_SUBMIT_PERCENT )) || { log "Results disk ${used}% >= ${STOP_SUBMIT_PERCENT}%"; exit 0; }
 (( dirs < MAX_LOCAL_SAMPLE_DIRS )) || { log "Local sample dirs ${dirs} >= ${MAX_LOCAL_SAMPLE_DIRS}"; exit 0; }
 eligible=PENDING; [[ "$phase" == DEFERRED_RETRY ]] && eligible=PIPELINE_DEFERRED_RETRY
-mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR>1&&$4==s{print $1}' "$STATUS_FILE" | head -n "$PIPELINE_WAVE_SIZE")
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+    mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR>1&&$4==s{print $1}' "$STATUS_FILE")
+else
+    mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR>1&&$4==s{print $1}' "$STATUS_FILE" | head -n "$PIPELINE_WAVE_SIZE")
+fi
 ((${#samples[@]})) || { log "No eligible samples"; exit 0; }
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]] && command -v scontrol >/dev/null 2>&1; then
+    max_array_size=$(scontrol show config 2>/dev/null | awk -F= '/^[[:space:]]*MaxArraySize[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}')
+    if [[ "$max_array_size" =~ ^[0-9]+$ ]] && (( ${#samples[@]} >= max_array_size )); then
+        die "${#samples[@]} samples exceed Slurm MaxArraySize=$max_array_size (task IDs must be below MaxArraySize); reduce the eligible set administratively or raise MaxArraySize"
+    fi
+fi
 seq_file="${MANAGER_ROOT}/state/wave_sequence"; exec 7>"${MANAGER_ROOT}/state/locks/wave_id.lock"; flock -x 7
 seq=0; [[ -s "$seq_file" ]] && read -r seq < "$seq_file"; seq=$((seq+1)); printf '%s\n' "$seq" > "${seq_file}.tmp.$$"; mv "${seq_file}.tmp.$$" "$seq_file"; flock -u 7
-wave_id=$(printf 'wave_%s_%s_%06d' "$(date -u +%Y%m%dT%H%M%SZ)" "$HPC_NAME" "$seq")
+id_prefix=wave; [[ "$PIPELINE_MODE" == streaming_per_sample ]] && id_prefix=stream_submission
+wave_id=$(printf "${id_prefix}_%s_%s_%06d" "$(date -u +%Y%m%dT%H%M%SZ)" "$HPC_NAME" "$seq")
 wave_file="${MANAGER_ROOT}/manifests/pipeline_waves/${wave_id}.samples.tsv"; submit_log="${MANAGER_ROOT}/logs/${wave_id}.submit.log"
 for sample in "${samples[@]}"; do printf '%s\t%s\n' "$sample" "$(sample_species "$sample")"; done > "$wave_file"
 manifest_sha=$(file_sha256 "$wave_file"); config_sha=$(file_sha256 "$PIPELINE_CONFIG"); git_commit=$(git_commit_or_unknown)
@@ -73,14 +91,14 @@ if ((rc!=0)) || [[ -z "$job_id" ]]; then
 fi
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
  map_file="${MANAGER_ROOT}/state/array_sample_map/${wave_id}.tsv"
- { printf 'wave_id\tpipeline_job_id\tarray_task_id\tsample_id\treference_name\tsample_work_root\n'; i=1; while IFS=$'\t' read -r sample reference; do printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$wave_id" "$job_id" "$i" "$sample" "$reference" "$(sample_work_root "$sample")"; i=$((i+1)); done < "$wave_file"; } > "${map_file}.tmp.$$"
+ { printf 'submission_id\tarray_job_id\tarray_task_id\tsample_id\treference_name\tsample_work_root\tphase\n'; i=1; while IFS=$'\t' read -r sample reference; do printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$wave_id" "$job_id" "$i" "$sample" "$reference" "$(sample_work_root "$sample")" "$phase"; i=$((i+1)); done < "$wave_file"; } > "${map_file}.tmp.$$"
  awk -F '\t' 'NR==1{next} $3!=NR-1{bad=1} END{exit(bad || NR<2)}' "${map_file}.tmp.$$" || die "array_sample_map task IDs must start at 1 and increase continuously"
  mv "${map_file}.tmp.$$" "$map_file"; chmod a-w "$map_file" 2>/dev/null || true
 fi
 finalize_wave() {
     update_wave_row "$wave_id" "pipeline_job_id=$job_id" "status=SUBMITTED" "slurm_state=PENDING" "notes=submitted; phase=$phase"
     local s attempts previous next_status
-    for s in "${samples[@]}"; do previous=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); next_status=WAVE_SUBMITTED; [[ "$previous" == PIPELINE_DEFERRED_RETRY ]] && next_status=PIPELINE_DEFERRED_RUNNING; attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=$next_status" "slurm_job_id=$job_id" "wave_id=$wave_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=manager wave submitted; phase=$phase"; done
+    for s in "${samples[@]}"; do previous=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); next_status=WAVE_SUBMITTED; [[ "$PIPELINE_MODE" == streaming_per_sample ]] && next_status=PIPELINE_SUBMITTED; [[ "$previous" == PIPELINE_DEFERRED_RETRY ]] && next_status=PIPELINE_DEFERRED_RUNNING; attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=$next_status" "slurm_job_id=$job_id" "wave_id=$wave_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=manager submission created; phase=$phase"; done
 }
 with_state_lock finalize_wave
-log "Submitted wave $wave_id (${#samples[@]} samples) as Slurm job $job_id"
+log "Submitted $([[ "$PIPELINE_MODE" == streaming_per_sample ]] && echo streaming-submission || echo wave) $wave_id (${#samples[@]} samples) as Slurm job $job_id"

@@ -236,3 +236,30 @@ their cache.  They neither consume another pipeline attempt nor create a
 replacement wave.  The work filesystem is monitored independently from the
 results filesystem; stop, emergency-clean, and critical thresholds prevent new
 submission without ever removing active work.
+
+## Sample-native streaming scheduling
+
+`streaming_per_sample` is sample-native: the manager selects every currently
+eligible sample into one immutable streaming-submission manifest, invokes
+`launch_pipeline_streaming_per_sample.sh` once, and the launcher creates one
+Slurm array with one task per sample. Slurm's `%N` array throttle continuously
+fills freed slots, so a slow sample does not block later tasks. Completion,
+failure, validation, and transfer readiness are reconciled independently for
+each exact array element while the rest of its submission remains active.
+
+`SAMPLE_CHAIN_CONCURRENCY` is the single effective global streaming concurrency
+and is passed as `MAX_CONCURRENT`. The manager permits only one active streaming
+submission, preventing several `%N` arrays from multiplying concurrency.
+`PIPELINE_WAVE_SIZE` and `MAX_ACTIVE_PIPELINE_WAVES` are ignored/deprecated for
+streaming mode but remain effective for legacy modes. Submission manifests and
+`wave_status.tsv` rows are retained as immutable/audit-compatible records, not
+lifecycle barriers. Array mappings persist submission ID, array job/task IDs,
+sample, reference, per-sample work root, and phase; `sacct` is queried as
+`job_task`. Existing `WAVE_SUBMITTED` streaming state is reconciled in place
+from validation, markers, and exact task accounting; completed, retained, and
+manual `PIPELINE_INCOMPLETE_REVIEW` states are never reset.
+
+Before submitting, the manager reads Slurm `MaxArraySize` when `scontrol` is
+available. Because valid indices must be below that value, an oversized
+selection fails with an actionable error rather than silently returning to
+50-sample groups or creating independently throttled arrays.

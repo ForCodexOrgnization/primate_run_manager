@@ -234,9 +234,12 @@ normal_active_wave_count() { awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)
 determine_manager_phase() {
     local used pending active deferred phase reason tmp
     used=$(work_disk_used_percent); pending=$(awk -F '\t' 'NR>1&&$4=="PENDING"{n++}END{print n+0}' "$STATUS_FILE")
-    active=$(normal_active_wave_count); deferred=$(awk -F '\t' 'NR>1&&$4=="PIPELINE_DEFERRED_RETRY"{n++}END{print n+0}' "$STATUS_FILE")
+    if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+        active=$(awk -F '\t' 'NR>1&&$4~/^(WAVE_SUBMITTED|PIPELINE_SUBMITTED|PIPELINE_RUNNING)$/{n++}END{print n+0}' "$STATUS_FILE")
+    else active=$(normal_active_wave_count); fi
+    deferred=$(awk -F '\t' 'NR>1&&$4=="PIPELINE_DEFERRED_RETRY"{n++}END{print n+0}' "$STATUS_FILE")
     if (( used >= WORK_CRITICAL_PERCENT )); then phase=PAUSED_DISK_PRESSURE; reason="critical work filesystem ${used}%";
-    elif (( pending > 0 || active > 0 )); then phase=NORMAL; reason="new samples or normal wave active";
+    elif (( pending > 0 || active > 0 )); then phase=NORMAL; reason="new samples or normal sample tasks active";
     elif (( deferred > 0 && ENABLE_DEFERRED_RETRY == 1 )); then phase=DEFERRED_RETRY; reason="pending empty; deferred work available";
     else phase=NORMAL; reason="idle"; fi
     tmp="${MANAGER_PHASE_FILE}.tmp.$$"; { printf 'phase\tupdated_at\tpending_count\tnormal_active_wave_count\tdeferred_count\treason\n'; printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$phase" "$(now_iso)" "$pending" "$active" "$deferred" "$reason"; } > "$tmp"; mv "$tmp" "$MANAGER_PHASE_FILE"

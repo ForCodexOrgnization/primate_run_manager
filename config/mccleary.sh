@@ -12,8 +12,8 @@ PIPELINE_WORK_ROOT="/vast/palmer/scratch/lake_nicole/lt692/nf_work_dir_all_per_b
 GLOBAL_REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/Ref_whole"
 REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/Ref_chrM"
 NUCLEAR_ONLY_REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/nuclear_only_refs"
-# Conservative first-deployment values. Increase PIPELINE_WAVE_SIZE to 50 and
-# CHAIN_CONCURRENT_BATCHES to 3 after the initial test.
+# Streaming uses SAMPLE_CHAIN_CONCURRENCY as its global Slurm array throttle.
+# PIPELINE_WAVE_SIZE and MAX_ACTIVE_PIPELINE_WAVES remain legacy-only settings.
 PIPELINE_WAVE_SIZE=50
 SAMPLE_CHAIN_CONCURRENCY=10
 IMMEDIATE_SAMPLE_RETRIES=1

@@ -46,12 +46,29 @@ load_config() {
     : "${WORK_EMERGENCY_CLEAN_PERCENT:=82}" "${WORK_CRITICAL_PERCENT:=90}"
     : "${ENABLE_ORPHAN_WORK_CLEANUP:=1}" "${ORPHAN_WORK_RETENTION_HOURS:=48}"
     : "${MAX_DIAGNOSTIC_LOG_LINES:=5000}" "${MAX_DIAGNOSTIC_FILE_BYTES:=10485760}"
-    : "${PIPELINE_MODE:=legacy_batch}" "${SAMPLE_CHAIN_CONCURRENCY:=10}"
+    : "${PIPELINE_MODE:=batch}" "${SAMPLE_CHAIN_CONCURRENCY:=10}"
     : "${IMMEDIATE_SAMPLE_RETRIES:=1}" "${IMMEDIATE_RETRY_DELAY_SECONDS:=60}"
     : "${CLEAN_VALIDATED_STAGE_WORK:=1}" "${REMOVE_SAMPLE_ROOT_ON_SUCCESS:=1}"
     : "${FAILED_CACHE_CLEAN_TRIGGER_PERCENT:=70}" "${FAILED_CACHE_CLEAN_TARGET_PERCENT:=65}"
     : "${STREAM_PARTITION:=day}"
     : "${STREAM_SMOKE_TEST:=0}"
+    case "$PIPELINE_MODE" in
+      legacy_batch) PIPELINE_MODE=batch ;;
+      streaming_per_sample|batch) ;;
+      *) die "PIPELINE_MODE must be streaming_per_sample or batch (legacy_batch is an alias)" ;;
+    esac
+    if [[ -n "${PIPELINE_LAUNCHER:-}" ]]; then
+        : "${STREAMING_PIPELINE_LAUNCHER:=$PIPELINE_LAUNCHER}"
+        : "${BATCH_PIPELINE_LAUNCHER:=$PIPELINE_LAUNCHER}"
+    else
+        : "${STREAMING_PIPELINE_LAUNCHER:=${PIPELINE_REPO:-}/launch_pipeline_streaming_per_sample.sh}"
+        : "${BATCH_PIPELINE_LAUNCHER:=${PIPELINE_REPO:-}/launch_pipeline_all_per_batch.sh}"
+    fi
+    if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+        PIPELINE_LAUNCHER="$STREAMING_PIPELINE_LAUNCHER"
+    else
+        PIPELINE_LAUNCHER="$BATCH_PIPELINE_LAUNCHER"
+    fi
     STATUS_FILE="${MANAGER_ROOT}/state/sample_status.tsv"
     WAVE_STATUS_FILE="${MANAGER_ROOT}/state/wave_status.tsv"
     TRANSFER_TASK_FILE="${MANAGER_ROOT}/state/transfer_tasks.tsv"
@@ -60,7 +77,7 @@ load_config() {
     WAVE_FAILURE_FILE="${MANAGER_ROOT}/state/wave_failures.tsv"
     MANAGER_RUNTIME_ROOT="${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}"
     RUNTIME_LOG_DIR="${RUNTIME_LOG_DIR:-${MANAGER_RUNTIME_ROOT}/logs}"
-    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/array_sample_map,state/receipts/deferred_wave_work_cleanup,state/receipts/failed_sample_work_cleanup,state/failure_diagnostics/samples,manifests/pipeline_waves,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
+    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/array_sample_map,state/submission_task_map,state/receipts/deferred_wave_work_cleanup,state/receipts/failed_sample_work_cleanup,state/failure_diagnostics/samples,manifests/pipeline_waves,manifests/submissions,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
     [[ "$PIPELINE_MODE" != streaming_per_sample ]] || mkdir -p "$PIPELINE_WORK_ROOT"/{.sample_state,.locks,.manifests}
 }
 
@@ -93,12 +110,15 @@ validate_config() {
             die "NEXTFLOW_MODULE is required unless nextflow is already available"
         [[ -n "${SAMTOOLS_MODULE:-}" ]] || command -v samtools >/dev/null 2>&1 ||
             die "SAMTOOLS_MODULE is required unless samtools is already available"
+    else
+        [[ -n "${PIPELINE_REPO:-}" && -d "$PIPELINE_REPO" ]] || die "PIPELINE_REPO directory does not exist: ${PIPELINE_REPO:-<unset>}"
+        [[ -s "$BATCH_PIPELINE_LAUNCHER" ]] || die "batch launcher missing: $BATCH_PIPELINE_LAUNCHER"
     fi
     [[ -x "$PIPELINE_LAUNCHER" ]] || die "PIPELINE_LAUNCHER missing or not executable: $PIPELINE_LAUNCHER"
     for v in PIPELINE_WAVE_SIZE SAMPLE_CHAIN_CONCURRENCY IMMEDIATE_SAMPLE_RETRIES IMMEDIATE_RETRY_DELAY_SECONDS CLEAN_VALIDATED_STAGE_WORK REMOVE_SAMPLE_ROOT_ON_SUCCESS STREAM_SMOKE_TEST FAILED_CACHE_CLEAN_TRIGGER_PERCENT FAILED_CACHE_CLEAN_TARGET_PERCENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
-    if [[ "$PIPELINE_MODE" != streaming_per_sample ]]; then
+    if [[ "$PIPELINE_MODE" == batch ]]; then
       for v in PIPELINE_BATCH_SIZE CHAIN_CONCURRENT_BATCHES NUMT_CONCURRENT; do [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"; done
     fi
     for v in REQUIRE_SLURM_FOR_EXISTING_IMPORT ALLOW_INTERACTIVE_IMPORT SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS ENABLE_FULL_SCAN_IN_MANAGER_CYCLE ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE REQUIRE_SLURM_FOR_FULL_SCAN ALLOW_INTERACTIVE_FULL_SCAN ENABLE_INFRASTRUCTURE_RESUME REQUIRE_RESUME_FINGERPRINT_MATCH ENABLE_DEFERRED_RETRY MAX_DEFERRED_RETRIES CLEAN_TERMINAL_DEFERRED_WORK ARCHIVE_FAILURE_DIAGNOSTICS WORK_STOP_SUBMIT_PERCENT WORK_EMERGENCY_CLEAN_PERCENT WORK_CRITICAL_PERCENT ENABLE_ORPHAN_WORK_CLEANUP ORPHAN_WORK_RETENTION_HOURS MAX_DIAGNOSTIC_LOG_LINES MAX_DIAGNOSTIC_FILE_BYTES; do
@@ -121,6 +141,17 @@ validate_config() {
     case "${GLOBUS_SYNC_LEVEL:-}" in exists|size|mtime|checksum) ;; *) die "GLOBUS_SYNC_LEVEL must be one of: exists size mtime checksum" ;; esac
     if [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]]; then command -v sbatch >/dev/null || die "sbatch not found"; fi
     if [[ "$ENABLE_TRANSFER" == 1 && "$DRY_RUN" == 0 ]]; then load_globus_module; fi
+}
+
+submission_task_state() {
+    local job="$1" task="$2"
+    command -v sacct >/dev/null 2>&1 || return 0
+    sacct -n -j "${job}_${task}" --format=JobIDRaw,State --parsable2 2>/dev/null |
+      awk -F '|' -v wanted="${job}_${task}" '$1==wanted{sub(/ .*/,"",$2);sub(/\+$/, "", $2);print $2;exit}'
+}
+
+active_submission_count() {
+    awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{n++}END{print n+0}' "$WAVE_STATUS_FILE"
 }
 
 with_state_lock() { local lock_file="${MANAGER_ROOT}/state/locks/state.lock"; exec 9>"$lock_file"; flock -x 9; "$@"; local rc=$?; flock -u 9; return "$rc"; }
@@ -211,8 +242,12 @@ sample_work_root() { safe_sample_id "$1" || die "unsafe sample ID: $1"; printf '
 marker_field() { local file="$1" field="$2"; awk -F '\t' -v f="$field" 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next} NR==2{if(h[f])print $h[f];exit}' "$file"; }
 sample_array_state() {
     local sample="$1" map job task
-    map=$(awk -F '\t' -v s="$sample" 'NR>1&&$4==s{line=$0}END{print line}' "${MANAGER_ROOT}/state/array_sample_map/"*.tsv 2>/dev/null || true)
-    [[ -n "$map" ]] || return 0; job=$(cut -f2 <<<"$map"); task=$(cut -f3 <<<"$map")
+    map=$(awk -F '\t' -v s="$sample" 'NR>1&&$6=="SAMPLE"&&$8==s{line=$0}END{print line}' "${MANAGER_ROOT}/state/submission_task_map/"*.tsv 2>/dev/null || true)
+    if [[ -n "$map" ]]; then job=$(cut -f4 <<<"$map"); task=$(cut -f5 <<<"$map")
+    else
+      map=$(awk -F '\t' -v s="$sample" 'NR>1&&$4==s{line=$0}END{print line}' "${MANAGER_ROOT}/state/array_sample_map/"*.tsv 2>/dev/null || true)
+      [[ -n "$map" ]] || return 0; job=$(cut -f2 <<<"$map"); task=$(cut -f3 <<<"$map")
+    fi
     command -v sacct >/dev/null 2>&1 || return 0
     sacct -n -j "${job}_${task}" --format=JobIDRaw,State --parsable2 2>/dev/null |
         awk -F '|' -v wanted="${job}_${task}" '$1==wanted {sub(/ .*/,"",$2);sub(/\+$/, "", $2);print $2; exit}'

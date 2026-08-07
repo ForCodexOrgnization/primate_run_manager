@@ -3,7 +3,8 @@ HPC_NAME="MCCLEARY"
 MANAGER_ROOT="/home/lt692/ycga_work/primate_run_manager"
 PIPELINE_REPO="/home/lt692/ycga_work/primate_mt_variant_calling"
 PIPELINE_MODE="streaming_per_sample"
-PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_streaming_per_sample.sh"
+STREAMING_PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_streaming_per_sample.sh"
+BATCH_PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_all_per_batch.sh"
 PIPELINE_CONFIG="${PIPELINE_REPO}/nextflow_mcc.config"
 ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/mcc_sample_list_update.txt"
 LOCAL_RESULTS="/home/lt692/ycga_work/primate_results"
@@ -13,7 +14,7 @@ GLOBAL_REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/Ref_w
 REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/Ref_chrM"
 NUCLEAR_ONLY_REF_DIR="/vast/palmer/scratch/lake_nicole/lt692/variant_calling_ref/nuclear_only_refs"
 # Streaming uses SAMPLE_CHAIN_CONCURRENCY as its global Slurm array throttle.
-# PIPELINE_WAVE_SIZE and MAX_ACTIVE_PIPELINE_WAVES remain legacy-only settings.
+# Deprecated compatibility settings: ignored by both task-native modes.
 PIPELINE_WAVE_SIZE=50
 SAMPLE_CHAIN_CONCURRENCY=10
 IMMEDIATE_SAMPLE_RETRIES=1

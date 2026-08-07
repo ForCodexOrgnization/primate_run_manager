@@ -16,6 +16,7 @@ elif [[ "$ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
 fi
 # Exact array elements are reconciled before transfer and new submission work.
 "${SCRIPT_DIR}/ingest_sample_markers.sh" "$cfg"
+"${SCRIPT_DIR}/ingest_batch_tasks.sh" "$cfg"
 "${SCRIPT_DIR}/archive_wave_failure_diagnostics.sh" "$cfg"
 "${SCRIPT_DIR}/archive_sample_failure_diagnostics.sh" "$cfg"
 if [[ "$PIPELINE_MODE" != streaming_per_sample ]]; then

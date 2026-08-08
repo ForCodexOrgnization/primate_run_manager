@@ -13,7 +13,7 @@ if [[ "${PATH_CHECK_REQUIRED:-1}" == 1 ]]; then
 fi
 active_tasks=$(awk -F '\t' 'NR>1&&$3=="ACTIVE"{n++}END{print n+0}' "$TRANSFER_TASK_FILE")
 (( active_tasks < MAX_ACTIVE_TRANSFER_TASKS )) || { log "Maximum active Globus tasks reached ($active_tasks/$MAX_ACTIVE_TRANSFER_TASKS)"; exit 0; }
-used=$(disk_used_percent); mapfile -t samples < <(get_samples_by_status '^READY_TO_TRANSFER$' | head -n "$TRANSFER_BATCH_SIZE")
+used=$(disk_used_percent); mapfile -t samples < <(get_samples_by_status_limit '^READY_TO_TRANSFER$' "$TRANSFER_BATCH_SIZE")
 ((${#samples[@]})) || { log "No READY_TO_TRANSFER samples"; exit 0; }
 if ((${#samples[@]}<TRANSFER_BATCH_SIZE && used<FORCE_TRANSFER_PERCENT)); then log "Waiting for transfer batch or disk threshold"; exit 0; fi
 for s in "${samples[@]}"; do

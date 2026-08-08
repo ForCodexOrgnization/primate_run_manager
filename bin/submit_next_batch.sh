@@ -16,9 +16,15 @@ mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR>1&&$4==s{print $1}' "$ST
 ((${#samples[@]})) || { log "No eligible samples"; exit 0; }
 required=${#samples[@]}; [[ "$PIPELINE_MODE" == batch ]] && required=$(( (${#samples[@]} + PIPELINE_BATCH_SIZE - 1) / PIPELINE_BATCH_SIZE ))
 if command -v scontrol >/dev/null 2>&1; then
-  max=$(scontrol show config 2>/dev/null | awk -F= '/^[[:space:]]*MaxArraySize[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2;exit}')
-  [[ ! "$max" =~ ^[0-9]+$ ]] || (( required < max )) || die "required array tasks ($required) exceed Slurm MaxArraySize=$max; no wave fallback was used"
+  max=$(scontrol show config 2>/dev/null | parse_slurm_max_array_size)
+  if [[ "$max" =~ ^[0-9]+$ ]]; then
+    log "INFO: slurm_max_array_size=$max"
+    (( required < max )) || die "required array tasks ($required) exceed Slurm MaxArraySize=$max; no wave fallback was used"
+  else
+    log "WARNING: unable to parse a numeric Slurm MaxArraySize; array-size validation skipped"
+  fi
 fi
+log "INFO: required_array_tasks=$required"
 seq_file="${MANAGER_ROOT}/state/submission_sequence"; exec 7>"${MANAGER_ROOT}/state/locks/submission_id.lock"; flock -x 7
 seq=0; [[ -s "$seq_file" ]] && read -r seq < "$seq_file"; seq=$((seq+1)); printf '%s\n' "$seq" > "$seq_file"; flock -u 7
 submission_id=$(printf '%s_%s_%s_%06d' "$([[ "$PIPELINE_MODE" == batch ]] && echo batch || echo stream)" "$(date -u +%Y%m%dT%H%M%SZ)" "$HPC_NAME" "$seq")

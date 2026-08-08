@@ -147,7 +147,7 @@ submission_task_state() {
     local job="$1" task="$2"
     command -v sacct >/dev/null 2>&1 || return 0
     sacct -n -j "${job}_${task}" --format=JobIDRaw,State --parsable2 2>/dev/null |
-      awk -F '|' -v wanted="${job}_${task}" '$1==wanted{sub(/ .*/,"",$2);sub(/\+$/, "", $2);print $2;exit}'
+      awk -F '|' -v wanted="${job}_${task}" '$1==wanted && state==""{sub(/ .*/,"",$2);sub(/\+$/, "", $2);state=$2} END{if(state!="")print state}'
 }
 
 active_submission_count() {
@@ -234,6 +234,21 @@ wave_field() { local wave="$1" field="$2"; awk -F '\t' -v w="$wave" -v f="$field
 latest_failed_wave_for_samples() { local list="$1"; awk -F '\t' -v list="$list" 'BEGIN{while((getline<list)>0){need[$1]=1;n++}} NR==1{for(i=1;i<=NF;i++)h[$i]=i;next} NR>1&&($9=="FAILED"||$9=="PARTIAL_COMPLETE"){split("",seen); c=0; while((getline line<$2)>0){split(line,a,"\t"); if(a[1] in need && !seen[a[1]]){seen[a[1]]=1;c++}} close($2); if(c==n) last=$1} END{print last}' "$WAVE_STATUS_FILE"; }
 work_root_resume_in_use() { local root="$1"; awk -F '\t' -v r="$root" 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next} NR>1 && h["work_root"] && $h["work_root"]==r && h["retry_of_wave_id"] && $h["retry_of_wave_id"]!="" && $9~/^(CREATED|SUBMITTED|RUNNING)$/ {found=1} END{exit !found}' "$WAVE_STATUS_FILE"; }
 get_samples_by_status() { local regex="$1"; awk -F '\t' -v r="$regex" 'NR>1 && $4 ~ r {print $1}' "$STATUS_FILE"; }
+# Print at most limit matches while still reading the complete state file.  Unlike
+# piping get_samples_by_status through head, this cannot close a producer early.
+get_samples_by_status_limit() { local regex="$1" limit="$2"; awk -F '\t' -v r="$regex" -v limit="$limit" 'NR>1 && $4 ~ r {if(n < limit) print $1; n++}' "$STATUS_FILE"; }
+
+# Read all of scontrol's output so that it cannot receive SIGPIPE under pipefail.
+parse_slurm_max_array_size() {
+    awk -F= '
+      /^[[:space:]]*MaxArraySize[[:space:]]*=/ {
+        value=$2
+        gsub(/[[:space:]]/, "", value)
+        if (max == "") max=value
+      }
+      END {if (max != "") print max}
+    '
+}
 sample_species() { local sample="$1"; awk -F '\t' -v s="$sample" 'NR>1&&$1==s{print $2;exit}' "$STATUS_FILE"; }
 disk_used_percent() { df -P "$DISK_CHECK_PATH" | awk 'NR==2{gsub(/%/,"",$5);print $5}'; }
 work_disk_used_percent() { df -P "$WORK_DISK_CHECK_PATH" | awk 'NR==2{gsub(/%/,"",$5);print $5}'; }
@@ -250,7 +265,7 @@ sample_array_state() {
     fi
     command -v sacct >/dev/null 2>&1 || return 0
     sacct -n -j "${job}_${task}" --format=JobIDRaw,State --parsable2 2>/dev/null |
-        awk -F '|' -v wanted="${job}_${task}" '$1==wanted {sub(/ .*/,"",$2);sub(/\+$/, "", $2);print $2; exit}'
+        awk -F '|' -v wanted="${job}_${task}" '$1==wanted && state=="" {sub(/ .*/,"",$2);sub(/\+$/, "", $2);state=$2} END{if(state!="")print state}'
 }
 
 # pipeline_attempts includes the initial manager submission.  Thus a value of 2

@@ -2,7 +2,7 @@
 HPC_NAME="BOUCHET"
 MANAGER_ROOT="/nfs/roberts/project/pi_njl27/lt692/primate_run_manager"
 PIPELINE_REPO="/nfs/roberts/project/pi_njl27/lt692/primate_mt_variant_calling"
-PIPELINE_MODE="streaming_per_sample"
+PIPELINE_MODE="batch"
 PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_streaming_per_sample.sh"
 PIPELINE_CONFIG="${PIPELINE_REPO}/nextflow.config"
 ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/bouchet_sample_list_update.txt"

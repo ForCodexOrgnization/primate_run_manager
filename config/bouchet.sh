@@ -11,9 +11,9 @@ ANALYSIS_ROOT="/nfs/roberts/pi/pi_njl27/lt692/primate_final_analysis"
 PIPELINE_WORK_ROOT="/nfs/roberts/scratch/pi_njl27/lt692/nf_work_dir_all_per_batch"
 # Required streaming references.  Fill these with the real Bouchet paths before
 # enabling submission; intentionally do not reuse another HPC's defaults.
-GLOBAL_REF_DIR=""
-REF_DIR=""
-NUCLEAR_ONLY_REF_DIR=""
+GLOBAL_REF_DIR="/home/lt692/scratch_pi_njl27/lt692/primate_mtDNA_analysis/references/variant_calling/Ref_whole"
+REF_DIR="/home/lt692/scratch_pi_njl27/lt692/primate_mtDNA_analysis/references/variant_calling/Ref_chrM"
+NUCLEAR_ONLY_REF_DIR="/home/lt692/scratch_pi_njl27/lt692/primate_mtDNA_analysis/references/variant_calling/nuclear_only_refs"
 # Conservative first-deployment values. Increase PIPELINE_WAVE_SIZE to 50 and
 # CHAIN_CONCURRENT_BATCHES to 3 after the initial test.
 PIPELINE_WAVE_SIZE=50
@@ -38,7 +38,7 @@ RESUME_ELIGIBLE_SLURM_STATES="TIMEOUT PREEMPTED NODE_FAIL BOOT_FAIL"
 REQUIRE_RESUME_FINGERPRINT_MATCH=1
 CLEAN_ON_SUCCESS=1
 ENABLE_CHUNKED_ALIGNMENT=true
-ENABLE_PIPELINE_SUBMIT=0
+ENABLE_PIPELINE_SUBMIT=1
 DISK_CHECK_PATH="/nfs/roberts/pi/pi_njl27/lt692"
 STOP_SUBMIT_PERCENT=70
 FORCE_TRANSFER_PERCENT=75

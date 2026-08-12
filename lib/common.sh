@@ -265,9 +265,7 @@ sample_array_state() {
       map=$(awk -F '\t' -v s="$sample" 'NR>1&&$4==s{line=$0}END{print line}' "${MANAGER_ROOT}/state/array_sample_map/"*.tsv 2>/dev/null || true)
       [[ -n "$map" ]] || return 0; job=$(cut -f2 <<<"$map"); task=$(cut -f3 <<<"$map")
     fi
-    command -v sacct >/dev/null 2>&1 || return 0
-    sacct -n -j "${job}_${task}" --format=JobIDRaw,State --parsable2 2>/dev/null |
-        awk -F '|' -v wanted="${job}_${task}" '$1==wanted && state=="" {sub(/ .*/,"",$2);sub(/\+$/, "", $2);state=$2} END{if(state!="")print state}'
+    submission_task_state "$job" "$task"
 }
 
 # pipeline_attempts includes the initial manager submission.  Thus a value of 2

@@ -300,3 +300,28 @@ terminal/manual/transfer states are not reset, and historical wave records remai
 available for audit and legacy reconciliation. If `MaxArraySize` cannot hold the
 required sample or batch task count, submission fails explicitly rather than
 falling back to waves.
+
+### Rebuilding a streaming rerun set after reconciliation
+
+Keep `ENABLE_PIPELINE_SUBMIT=0` while reconciling a completed array. Run a normal
+manager cycle and confirm with `show_status.sh` that no active submission,
+`PIPELINE_SUBMITTED`, `PIPELINE_RUNNING`, or `PIPELINE_DEFERRED_RUNNING` state
+remains. Then preview the conservative rerun set and apply it only after review:
+
+```bash
+bin/manager_cycle.sh config/bouchet.sh
+bin/show_status.sh config/bouchet.sh
+bin/requeue_unsuccessful_samples.sh config/bouchet.sh --dry-run
+bin/requeue_unsuccessful_samples.sh config/bouchet.sh --apply
+bin/show_status.sh config/bouchet.sh
+```
+
+The requeue utility selects only `PENDING`, `PIPELINE_DEFERRED_RETRY`,
+`PIPELINE_FAILED`, and `PIPELINE_INCOMPLETE_REVIEW` rows whose current formal
+validation is not complete. Apply mode takes the manager state lock, repeats all
+reconciliation checks, backs up `sample_status.tsv`, clears submission and error
+metadata, and changes selected rows to `PENDING`. It preserves attempt counts,
+successful samples, work directories, and `.sample_state` markers. It never
+submits work, transfers data, or performs cleanup. After checking the resulting
+state, restore `ENABLE_PIPELINE_SUBMIT=1` and use `manager_cycle.sh`; do not invoke
+the pipeline launcher directly.

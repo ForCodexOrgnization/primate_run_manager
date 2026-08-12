@@ -146,7 +146,9 @@ validate_config() {
 submission_task_state() {
     local job="$1" task="$2"
     command -v sacct >/dev/null 2>&1 || return 0
-    sacct -n -j "${job}_${task}" --format=JobIDRaw,State --parsable2 2>/dev/null |
+    # JobIDRaw can be Slurm's internal numeric ID (rather than array_job_task).
+    # JobID is the portable field that identifies the requested array element.
+    sacct -n -j "${job}_${task}" --format=JobID,State --parsable2 2>/dev/null |
       awk -F '|' -v wanted="${job}_${task}" '$1==wanted && state==""{sub(/ .*/,"",$2);sub(/\+$/, "", $2);state=$2} END{if(state!="")print state}'
 }
 

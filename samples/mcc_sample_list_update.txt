@@ -243,7 +243,6 @@ ERS1126695	Gorilla_beringei
 ERS11527608	Papio_ursinus
 ERS11527609	Papio_ursinus
 ERS1162825	Gorilla_beringei
-ERS12091962	Pithecia_chrysocephala
 ERS12091966	Pithecia_pissinatti
 ERS12091967	Pithecia_pissinatti
 ERS12091968	Pithecia_pissinatti
@@ -808,7 +807,6 @@ SRS1279259	Papio_cynocephalus
 SRS1279260	Papio_cynocephalus
 SRS1386483	Propithecus_diadema
 SRS1386484	Propithecus_diadema
-SRS13919147	Miopithecus_talapoin
 SRS13919154	Symphalangus_syndactylus
 SRS13919162	Varecia_variegata
 SRS15139582	Macaca_mulatta

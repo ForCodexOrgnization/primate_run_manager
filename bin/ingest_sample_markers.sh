@@ -22,8 +22,17 @@ while IFS=$'\t' read -r sample current attempts submission; do
    with_state_lock update_sample_fields "$sample" "status=$next" "notes=exact sample array element active: $state"
    continue
  fi
- # Empty state means accounting is temporarily unavailable, not terminal.
- [[ -n "$state" ]] || continue
+ # Accounting can age out after the owning submission has become terminal.  In
+ # that case an empty exact-task state is conclusive enough to release a stale
+ # submitted row.  Preserve newly submitted work while its audit row is active.
+ if [[ -z "$state" ]]; then
+   # Rows without submission provenance cannot be proven terminal.
+   [[ -n "$submission" ]] || continue
+   submission_status=$(wave_field "$submission" status)
+   [[ -n "$submission_status" ]] || continue
+   [[ "$submission_status" =~ ^(CREATED|SUBMITTED|RUNNING)$ ]] && continue
+   state=ACCOUNTING_RECORD_UNAVAILABLE
+ fi
  phase=$(awk -F '\t' -v s="$sample" 'NR>1&&$4==s{p=$7}END{print p}' "${MANAGER_ROOT}/state/array_sample_map/"*.tsv 2>/dev/null || true)
  if [[ -z "$phase" ]]; then notes=$(wave_field "$submission" notes); phase=NORMAL; [[ "$notes" == *phase=DEFERRED_RETRY* ]] && phase=DEFERRED_RETRY; fi
  next=$(deferred_terminal_status "$phase" "$attempts")

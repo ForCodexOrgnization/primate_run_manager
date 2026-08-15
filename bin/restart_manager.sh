@@ -22,15 +22,16 @@ while [[ -n "$(daemons)" ]]; do ((SECONDS<deadline))||die "daemon stop timeout a
 exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8||die 'manager-cycle lock remains busy'; flock -u 8
 # This never cancels work: unsafe/active samples make reconciliation fail.
 "$SCRIPT_DIR/reconcile_assigned_sample_scope.sh" "$cfg"
-# Observation-only reconciliation: these helpers never submit pipeline work.
-"$SCRIPT_DIR/update_wave_states.sh" "$cfg"; [[ $ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE != 1 ]]||"$SCRIPT_DIR/scan_active_results.sh" "$cfg"; "$SCRIPT_DIR/ingest_sample_markers.sh" "$cfg"; "$SCRIPT_DIR/ingest_batch_tasks.sh" "$cfg"; [[ $ARCHIVE_FAILURE_DIAGNOSTICS != 1 ]]||"$SCRIPT_DIR/archive_sample_failure_diagnostics.sh" "$cfg"
-"$SCRIPT_DIR/manager_restart_preflight.sh" "$cfg"
 # The normal cycle's active_submission_count/phase protections are the duplicate
 # submission guard; restart does not bypass or replace them.
 ((skip))||"$SCRIPT_DIR/manager_cycle.sh" "$cfg"
+# Validate the reconciled state before installing the replacement daemon.
+"$SCRIPT_DIR/manager_restart_preflight.sh" "$cfg"
 out=$("$SCRIPT_DIR/submit_manager_daemon.sh" "$cfg"); echo "$out"; new=$(awk '/Submitted manager daemon Slurm job/{print $6}'<<<"$out"|tail -1); [[ -n $new ]]||die 'new daemon ID not captured'; sleep "${MANAGER_RESTART_VERIFY_DELAY_SECONDS:-2}"
 after=$(daemons); [[ $(awk 'NF{n++}END{print n+0}'<<<"$after") == 1 ]]||die 'new daemon verification count failed'; state=$(awk -F'|' -v id="$new" '$1==id{print $2}'<<<"$after"); [[ -n $state ]]||die "daemon $new not RUNNING/PENDING"
 if [[ -n $active ]]; then array_after=$(wave_field "$active" pipeline_job_id); [[ $array_after == "$array" ]]||die 'pipeline array identity changed'; else array_after=; fi
 phase=$(manager_phase); hold="$MANAGER_ROOT/state/streaming_array_disk_holds.tsv"; held=0; [[ ! -s $hold ]]||held=$(awk 'END{print NR-1}' "$hold"); count(){ awk -F'\t' -v r="$1" 'NR>1&&$4~r{n++}END{print n+0}' "$STATUS_FILE"; }
 printf '\nManager restart successful\n--------------------------\nConfig: %s\nOld daemon: %s STOPPED\nNew daemon: %s %s\nPipeline array: %s%s\nPipeline mode: %s\nSample concurrency: %s\nManager phase: %s\nWork filesystem: %s%%\nDisk admission: %s\n\nSamples:\n  retained: %s\n  ready_to_transfer: %s\n  deferred_retry: %s\n  submitted/running: %s\n\nRestart snapshot:\n  %s\n\n' "$cfg" "$old_id" "$new" "$state" "${array_after:-none}" "$([[ -n $array ]]&&echo ' (unchanged)'||true)" "$PIPELINE_MODE" "$SAMPLE_CHAIN_CONCURRENCY" "$phase" "$(work_disk_used_percent)" "$([[ $held -gt 0 ]]&&echo HELD||echo ACTIVE)" "$(count '^LOCAL_FINAL_RETAINED$')" "$(count '^READY_TO_TRANSFER$')" "$(count '^PIPELINE_DEFERRED_RETRY$')" "$(count '^(PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_DEFERRED_RUNNING)$')" "$snap"
-"$SCRIPT_DIR/show_status.sh" "$cfg"
+if ! "$SCRIPT_DIR/show_status.sh" "$cfg"; then
+    printf 'WARNING: manager daemon %s restarted successfully, but final status display failed; run bin/show_status.sh %q for details.\n' "$new" "$cfg" >&2
+fi

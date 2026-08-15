@@ -230,6 +230,7 @@ update_wave_row() {
 }
 slurm_normalize_state() { local s="${1%% *}"; s="${s%+}"; printf '%s\n' "$s"; }
 slurm_state_is_active() { case "$(slurm_normalize_state "$1")" in PENDING|RUNNING|CONFIGURING|COMPLETING|REQUEUED|RESIZING|SUSPENDED) return 0;; *) return 1;; esac; }
+slurm_state_is_terminal() { case "$(slurm_normalize_state "$1")" in COMPLETED|FAILED|CANCELLED|TIMEOUT|PREEMPTED|NODE_FAIL|OUT_OF_MEMORY|BOOT_FAIL) return 0;; *) return 1;; esac; }
 manager_wave_state_is_active() { case "$1" in CREATED|SUBMITTED|RUNNING) return 0;; *) return 1;; esac; }
 active_wave_count() { awk -F '\t' 'NR>1 && $9 ~ /^(CREATED|SUBMITTED|RUNNING)$/ {n++} END{print n+0}' "$WAVE_STATUS_FILE"; }
 samples_in_wave() { local wave="${1:-}"; awk -F '\t' -v w="$wave" 'NR>1 && $6!="" && (w==""||$6==w) && $4 ~ /^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING)$/ {print $1}' "$STATUS_FILE"; }

@@ -123,8 +123,8 @@ grep -q '^SAMPLE_CHAIN_CONCURRENCY=10' <(bash -c 'source "$1"; echo SAMPLE_CHAIN
 # are clear, while the earlier dry-run exit cannot reach that invocation.
 grep -q 'reconcile_assigned_sample_scope.sh' "$REPO/bin/restart_manager.sh"
 awk '/stop_manager_daemon.sh/{st=NR}/reconcile_assigned_sample_scope.sh/{rec=NR}END{exit !(st<rec)}' "$REPO/bin/restart_manager.sh"
-# manager_cycle is the only reconciliation authority in the normal path.
-[[ $(grep -Ec '^\(\(skip\)\)\|\|"\$SCRIPT_DIR/manager_cycle\.sh"' "$REPO/bin/restart_manager.sh") == 1 ]]
+# manager_cycle remains the reconciliation authority for both restart modes.
+[[ $(grep -Ec 'MANAGER_CYCLE_LOCK_HELD=1 MANAGER_RECOVERY_MODE=1 .*manager_cycle\.sh|flock -u 8; .*manager_cycle\.sh' "$REPO/bin/restart_manager.sh") == 1 ]]
 for helper in update_wave_states scan_active_results ingest_sample_markers ingest_batch_tasks archive_sample_failure_diagnostics; do
  ! grep -q '"\$SCRIPT_DIR/'"$helper"'\.sh"' "$REPO/bin/restart_manager.sh"
 done

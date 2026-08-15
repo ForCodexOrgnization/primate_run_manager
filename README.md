@@ -2,7 +2,7 @@
 
 This repository is an external orchestration layer; it does not alter the preprocessing, NUMT, round1, or round2 workflows in `primate_mt_variant_calling`.
 
-## Safe manager-daemon restart
+## Restart the manager daemon only
 
 An active variant-calling array does not need to be stopped or changed. Audit readiness with
 `bin/manager_restart_preflight.sh config/mccleary.sh`. Normal operations are one command:
@@ -18,6 +18,30 @@ snapshots small metadata, gracefully terminates only the current user's
 its existing active-submission guards, and starts/verifies one daemon. It never runs
 `git pull` or directly cancels, requeues, holds, or releases a pipeline array.
 `--skip-cycle` is available for an emergency daemon-only restart.
+
+## Recover after an intentional pipeline cancellation
+
+After an operator cancels a pipeline array to deploy pipeline code or configuration
+changes, inspect the complete read-only plan and then apply it:
+
+```bash
+bin/restart_manager.sh config/mccleary.sh --recover-cancelled --dry-run
+bin/restart_manager.sh config/mccleary.sh --recover-cancelled
+```
+
+Recovery requires `squeue` to show no part of the old array and `sacct` to prove
+its terminal cancellation. It snapshots state, stops only the daemon, marks the old
+submission cancelled, and detaches only incomplete, currently assigned samples in
+the submission's immutable task map. They become `PIPELINE_DEFERRED_RETRY`; attempts
+and per-sample Nextflow work/cache are preserved. Validated-complete samples and
+genuine deferred/terminal failures are not reactivated. Scope reconciliation and the
+normal manager cycle refresh state, use `submit_next_batch.sh` when all disk/result
+gates permit, and start exactly one daemon.
+
+`--recover-cancelled` **never cancels a live pipeline array itself**. A live `squeue`
+record, missing accounting, or ambiguous accounting blocks recovery without state
+mutation. At or above `WORK_STOP_SUBMIT_PERCENT`, reconciliation and daemon restart
+still finish, while replacement submission waits for a later ordinary manager cycle.
 
 ## Execution model and terminology
 

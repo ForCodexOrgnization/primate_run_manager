@@ -69,6 +69,29 @@ submit_replacement() {
     fi
 }
 
+# Normal cadence is split into cheap df-only waits.  No state scan or manager
+# reconciliation occurs unless the critical threshold is actually crossed.
+normal_pressure_sleep() {
+    local remaining=$MANAGER_POLL_SECONDS slice used
+    while (( remaining > 0 && stop_requested == 0 )); do
+        slice=$DISK_PRESSURE_POLL_SECONDS
+        (( slice > remaining )) && slice=$remaining
+        sleep "$slice" & sleep_pid=$!
+        wait "$sleep_pid" 2>/dev/null || true
+        sleep_pid=""
+        (( stop_requested == 0 )) || return 1
+        remaining=$((remaining - slice))
+        used=$(df -P "${WORK_DISK_CHECK_PATH:-$PIPELINE_WORK_ROOT}" | awk 'NR==2{gsub(/%/,"",$5); print $5}')
+        [[ "$used" =~ ^[0-9]+$ ]] || { printf '[%s] WARNING: work disk pressure probe returned an invalid value.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2; continue; }
+        if (( used >= WORK_CRITICAL_PERCENT )); then
+            printf '[%s] Critical work disk pressure detected by lightweight probe (%s%%); holding pending array elements now.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$used"
+            WORK_DISK_USED_PERCENT_OVERRIDE="$used" "$REPOSITORY_ROOT/bin/control_streaming_array_admission.sh" "$CONFIG_FILE"
+            return 2
+        fi
+    done
+    return 0
+}
+
 cycle=0
 consecutive_failures=0
 while (( stop_requested == 0 )); do
@@ -113,10 +136,17 @@ while (( stop_requested == 0 )); do
         "$finished" "$cycle" "$cycle_rc" "$next_check" "$delay"
 
     (( stop_requested == 0 )) || break
-    sleep "$delay" &
-    sleep_pid=$!
-    wait "$sleep_pid" 2>/dev/null || true
-    sleep_pid=""
+    if (( cycle_rc == 0 && delay == MANAGER_POLL_SECONDS )); then
+        normal_pressure_sleep && sleep_rc=0 || sleep_rc=$?
+        # rc=2 means admission control has already run and the loop should
+        # immediately start its expensive cleanup/reconciliation cycle.
+        (( sleep_rc != 1 )) || break
+    else
+        sleep "$delay" &
+        sleep_pid=$!
+        wait "$sleep_pid" 2>/dev/null || true
+        sleep_pid=""
+    fi
 done
 
 submit_replacement

@@ -11,6 +11,7 @@ bash -n "$CONFIG_FILE"
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 : "${MANAGER_ROOT:?MANAGER_ROOT must be configured}"
+: "${MANAGER_DAEMON_TIME:=23:30:00}"
 poll_seconds="${MANAGER_POLL_SECONDS:-1800}"
 [[ "$poll_seconds" =~ ^[1-9][0-9]*$ ]] || { printf 'ERROR: MANAGER_POLL_SECONDS must be a positive integer.\n' >&2; exit 1; }
 [[ -x "$MANAGER_ROOT/bin/manager_cycle.sh" ]] || { printf 'ERROR: Manager cycle is not executable under MANAGER_ROOT: %s\n' "$MANAGER_ROOT" >&2; exit 1; }
@@ -23,6 +24,7 @@ fi
 runtime_log_dir="${RUNTIME_LOG_DIR:-${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}/logs}"
 mkdir -p "$runtime_log_dir"
 submission=$(sbatch --parsable \
+    --time="$MANAGER_DAEMON_TIME" \
     --output="$runtime_log_dir/manager_daemon_%j.out" \
     --error="$runtime_log_dir/manager_daemon_%j.err" \
     "$REPOSITORY_ROOT/run_manager_daemon.slurm" "$CONFIG_FILE")

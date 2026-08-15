@@ -2,7 +2,6 @@
 #SBATCH --job-name=primate_manager_daemon
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=2G
-#SBATCH --time=5-00:00:00
 #SBATCH --signal=B:USR1@300
 
 set -uo pipefail
@@ -13,6 +12,7 @@ CONFIG_FILE="${1:?Usage: sbatch run_manager_daemon.slurm CONFIG}"
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 REPOSITORY_ROOT="${MANAGER_ROOT:?MANAGER_ROOT must be configured}"
+MANAGER_DAEMON_TIME="${MANAGER_DAEMON_TIME:-23:30:00}"
 MANAGER_POLL_SECONDS="${MANAGER_POLL_SECONDS:-1800}"
 DISK_PRESSURE_POLL_SECONDS="${DISK_PRESSURE_POLL_SECONDS:-60}"
 [[ "$MANAGER_POLL_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
@@ -58,6 +58,7 @@ submit_replacement() {
     (( resubmit_requested == 1 && replacement_submitted == 0 )) || return 0
     local submission job_id
     if submission=$(sbatch --parsable --dependency="afterany:${SLURM_JOB_ID:?}" \
+        --time="$MANAGER_DAEMON_TIME" \
         --output="$runtime_log_dir/manager_daemon_%j.out" \
         --error="$runtime_log_dir/manager_daemon_%j.err" \
         "$REPOSITORY_ROOT/run_manager_daemon.slurm" "$CONFIG_FILE"); then

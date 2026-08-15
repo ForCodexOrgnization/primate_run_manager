@@ -178,7 +178,7 @@ For an environment override, make a testing copy of the config and edit `DRY_RUN
 
 ## Continuous manager daemon
 
-The manager can run continuously as a five-day Slurm job; it is never started
+The manager runs continuously through renewable Slurm jobs; it is never started
 as a login-node background process. The daemon runs one `manager_cycle.sh` at a
 time, waits `MANAGER_POLL_SECONDS` after each successful cycle, and uses bounded
 delays of 5, 15, and then 30 minutes after consecutive failures. A separate
@@ -186,6 +186,12 @@ daemon lock prevents overlapping daemon processes. Five minutes before its
 wall time, Slurm signals the job so it can finish its active cycle and submit a
 replacement with an `afterany` dependency. It does not pull Git changes, reset
 state, or alter the conservative incomplete-sample retry policy.
+
+Each HPC config sets `MANAGER_DAEMON_TIME` independently. Submission and
+automatic replacement pass that duration to `sbatch --time`; McCleary defaults
+to the conservative `23:30:00` duration. Do not put config variables in
+`#SBATCH` directives, because Slurm reads those directives before the shell
+sources the config.
 
 Start, check, and stop it with:
 
@@ -202,6 +208,15 @@ already pending or running. The stop helper selects only this user's exact
 manager-cycle jobs untouched. Daemon output is written separately as
 `logs/manager_daemon_<jobid>.out` and `logs/manager_daemon_<jobid>.err` (under
 `RUNTIME_LOG_DIR` when configured).
+
+If restart reports that reconciliation succeeded but daemon submission failed,
+the reconciled manager state and pipeline array are left intact. After fixing
+the partition, QOS, or walltime issue, recover **without rerunning the restart
+or its expensive manager cycle** by submitting only the daemon:
+
+```bash
+bin/submit_manager_daemon.sh config/mccleary.sh
+```
 
 Recommended current Bouchet automation settings are:
 

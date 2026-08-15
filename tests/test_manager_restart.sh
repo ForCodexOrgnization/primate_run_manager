@@ -61,6 +61,10 @@ EOF
 cat >"$T/restart-repo/bin/submit_manager_daemon.sh" <<'EOF'
 #!/usr/bin/env bash
 echo submit >>"$TEST_ROOT/restart.calls"
+if [[ -e "$TEST_ROOT/fail-submit" ]]; then
+ echo 'sbatch: error: QOSMaxWallDurationPerJobLimit' >&2
+ exit 1
+fi
 printf '200|PENDING|primate_manager_daemon\n' >"$TEST_ROOT/daemon.queue"
 echo 'Submitted manager daemon Slurm job 200'
 EOF
@@ -87,6 +91,23 @@ fi
 grep -qx cycle "$T/restart.calls"
 ! grep -q '^submit$' "$T/restart.calls"
 rm -f "$T/fail-cycle"
+
+# Submission failure after successful reconciliation is explicit and does not
+# repeat the cycle or alter reconciled manager state/pipeline metadata.
+: >"$T/restart.calls"; touch "$T/fail-submit"
+printf '100|RUNNING|primate_manager_daemon\n' >"$T/daemon.queue"
+before=$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE")
+if MANAGER_RESTART_VERIFY_DELAY_SECONDS=0 bash "$T/restart-repo/bin/restart_manager.sh" "$T/config.sh" >"$T/submit-fail.out" 2>&1; then
+ echo 'restart accepted daemon submission failure' >&2; exit 1
+fi
+after=$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE"); [[ "$before" == "$after" ]]
+[[ $(grep -c '^cycle$' "$T/restart.calls") == 1 ]]
+[[ $(grep -c '^submit$' "$T/restart.calls") == 1 ]]
+grep -q 'manager cycle/reconciliation completed, but new daemon submission failed' "$T/submit-fail.out"
+grep -q 'Manager state is preserved' "$T/submit-fail.out"
+grep -q 'No pipeline array was modified' "$T/submit-fail.out"
+grep -q 'rerun submit_manager_daemon.sh' "$T/submit-fail.out"
+rm -f "$T/fail-submit"
 
 # An active streaming/batch submission without its audit map is always blocked.
 awk -F'\t' -v OFS='\t' 'NR==1{print;next}' "$WAVE_STATUS_FILE" >"$WAVE_STATUS_FILE.tmp"

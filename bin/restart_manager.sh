@@ -27,7 +27,15 @@ exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8||die 'manager-
 ((skip))||"$SCRIPT_DIR/manager_cycle.sh" "$cfg"
 # Validate the reconciled state before installing the replacement daemon.
 "$SCRIPT_DIR/manager_restart_preflight.sh" "$cfg"
-out=$("$SCRIPT_DIR/submit_manager_daemon.sh" "$cfg"); echo "$out"; new=$(awk '/Submitted manager daemon Slurm job/{print $6}'<<<"$out"|tail -1); [[ -n $new ]]||die 'new daemon ID not captured'; sleep "${MANAGER_RESTART_VERIFY_DELAY_SECONDS:-2}"
+if ! out=$("$SCRIPT_DIR/submit_manager_daemon.sh" "$cfg"); then
+    printf '%s\n' \
+        'ERROR: manager cycle/reconciliation completed, but new daemon submission failed.' \
+        'Manager state is preserved.' \
+        'No pipeline array was modified.' \
+        'Check Slurm partition/QOS/walltime and rerun submit_manager_daemon.sh.' >&2
+    exit 1
+fi
+echo "$out"; new=$(awk '/Submitted manager daemon Slurm job/{print $6}'<<<"$out"|tail -1); [[ -n $new ]]||die 'new daemon ID not captured'; sleep "${MANAGER_RESTART_VERIFY_DELAY_SECONDS:-2}"
 after=$(daemons); [[ $(awk 'NF{n++}END{print n+0}'<<<"$after") == 1 ]]||die 'new daemon verification count failed'; state=$(awk -F'|' -v id="$new" '$1==id{print $2}'<<<"$after"); [[ -n $state ]]||die "daemon $new not RUNNING/PENDING"
 if [[ -n $active ]]; then array_after=$(wave_field "$active" pipeline_job_id); [[ $array_after == "$array" ]]||die 'pipeline array identity changed'; else array_after=; fi
 phase=$(manager_phase); hold="$MANAGER_ROOT/state/streaming_array_disk_holds.tsv"; held=0; [[ ! -s $hold ]]||held=$(awk 'END{print NR-1}' "$hold"); count(){ awk -F'\t' -v r="$1" 'NR>1&&$4~r{n++}END{print n+0}' "$STATUS_FILE"; }

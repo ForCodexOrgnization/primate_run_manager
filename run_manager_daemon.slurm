@@ -14,8 +14,13 @@ CONFIG_FILE="${1:?Usage: sbatch run_manager_daemon.slurm CONFIG}"
 source "$CONFIG_FILE"
 REPOSITORY_ROOT="${MANAGER_ROOT:?MANAGER_ROOT must be configured}"
 MANAGER_POLL_SECONDS="${MANAGER_POLL_SECONDS:-1800}"
+DISK_PRESSURE_POLL_SECONDS="${DISK_PRESSURE_POLL_SECONDS:-60}"
 [[ "$MANAGER_POLL_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
     printf 'ERROR: MANAGER_POLL_SECONDS must be a positive integer\n' >&2
+    exit 1
+}
+[[ "$DISK_PRESSURE_POLL_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'ERROR: DISK_PRESSURE_POLL_SECONDS must be a positive integer\n' >&2
     exit 1
 }
 [[ -x "$REPOSITORY_ROOT/bin/manager_cycle.sh" ]] || {
@@ -83,6 +88,13 @@ while (( stop_requested == 0 )); do
     if (( cycle_rc == 0 )); then
         consecutive_failures=0
         delay=$MANAGER_POLL_SECONDS
+        hold_file="$MANAGER_ROOT/state/streaming_array_disk_holds.tsv"
+        phase_file="$MANAGER_ROOT/state/manager_phase.tsv"
+        if { [[ -s "$hold_file" ]] && (( $(awk 'END{print NR-1}' "$hold_file") > 0 )); } ||
+           { [[ -s "$phase_file" ]] && awk -F '\t' 'NR==2&&$1=="PAUSED_DISK_PRESSURE"{found=1}END{exit !found}' "$phase_file"; }; then
+            delay=$DISK_PRESSURE_POLL_SECONDS
+            printf '[%s] Disk pressure active; using accelerated %ss admission/cleanup check.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$delay"
+        fi
     else
         consecutive_failures=$((consecutive_failures + 1))
         case "$consecutive_failures" in

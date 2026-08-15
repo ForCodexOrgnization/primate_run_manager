@@ -32,6 +32,7 @@ else
 fi
 # Cleanup can release enough space to resume; never submit using a stale df value.
 work_used=$(work_disk_used_percent)
+WORK_DISK_USED_PERCENT_OVERRIDE="$work_used" "${SCRIPT_DIR}/control_streaming_array_admission.sh" "$cfg"
 determine_manager_phase
 if (( work_used >= WORK_CRITICAL_PERCENT )); then log "CRITICAL: work filesystem is ${work_used}% used; pipeline submissions forbidden"; fi
 "${SCRIPT_DIR}/check_globus_tasks.sh" "$cfg"

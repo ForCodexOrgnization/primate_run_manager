@@ -4,7 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR
 load_config "${1:-}"; ensure_state_files; determine_manager_phase
 count_status(){ awk -F '\t' -v s="$1" 'NR>1&&$4==s{n++}END{print n+0}' "$STATUS_FILE"; }
 printf 'Pipeline mode: %s\nManager phase: %s\n' "$PIPELINE_MODE" "$(manager_phase)"
-printf 'Pending samples: %s\nReady to transfer: %s\nDeferred retry: %s\nDeferred failed: %s\n' "$(count_status PENDING)" "$(count_status READY_TO_TRANSFER)" "$(count_status PIPELINE_DEFERRED_RETRY)" "$(count_status PIPELINE_DEFERRED_FAILED)"
+printf 'Pending samples: %s\nReady to transfer: %s\nDeferred retry: %s\nDeferred failed: %s\nOUT_OF_SCOPE: %s\n' "$(count_status PENDING)" "$(count_status READY_TO_TRANSFER)" "$(count_status PIPELINE_DEFERRED_RETRY)" "$(count_status PIPELINE_DEFERRED_FAILED)" "$(count_status OUT_OF_SCOPE)"
 active=$(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print $1;exit}' "$WAVE_STATUS_FILE"); printf 'Active submission: %s\n' "${active:-none}"
 job=""; [[ -z "$active" ]] || job=$(wave_field "$active" pipeline_job_id); printf 'Slurm array job ID: %s\n' "${job:-none}"
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then

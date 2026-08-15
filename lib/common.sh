@@ -79,7 +79,7 @@ load_config() {
     WAVE_FAILURE_FILE="${MANAGER_ROOT}/state/wave_failures.tsv"
     MANAGER_RUNTIME_ROOT="${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}"
     RUNTIME_LOG_DIR="${RUNTIME_LOG_DIR:-${MANAGER_RUNTIME_ROOT}/logs}"
-    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/array_sample_map,state/submission_task_map,state/receipts/deferred_wave_work_cleanup,state/receipts/failed_sample_work_cleanup,state/failure_diagnostics/samples,manifests/pipeline_waves,manifests/submissions,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
+    mkdir -p "${MANAGER_ROOT}"/{state/locks,state/array_sample_map,state/submission_task_map,state/receipts/deferred_wave_work_cleanup,state/receipts/failed_sample_work_cleanup,state/receipts/sample_scope_reconciliation,state/failure_diagnostics/samples,manifests/pipeline_waves,manifests/submissions,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
     [[ "$PIPELINE_MODE" != streaming_per_sample ]] || mkdir -p "$PIPELINE_WORK_ROOT"/{.sample_state,.locks,.manifests}
 }
 

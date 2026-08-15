@@ -40,4 +40,8 @@ grep -q 'missing task map' "$T/map"
 # restart has no pipeline-array control operation.
 grep -q '^SAMPLE_CHAIN_CONCURRENCY=10' <(bash -c 'source "$1"; echo SAMPLE_CHAIN_CONCURRENCY=${SAMPLE_CHAIN_CONCURRENCY:-10}' _ "$T/config.sh")
 ! grep -Eq 'scancel.*array|scontrol (hold|release|requeue)' "$REPO/bin/restart_manager.sh"
+# The mutating restart path reconciles only after the daemon/manager-cycle locks
+# are clear, while the earlier dry-run exit cannot reach that invocation.
+grep -q 'reconcile_assigned_sample_scope.sh' "$REPO/bin/restart_manager.sh"
+awk '/stop_manager_daemon.sh/{st=NR}/reconcile_assigned_sample_scope.sh/{rec=NR}END{exit !(st<rec)}' "$REPO/bin/restart_manager.sh"
 echo 'manager restart tests passed'

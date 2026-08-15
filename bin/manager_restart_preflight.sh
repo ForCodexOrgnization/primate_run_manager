@@ -2,7 +2,7 @@
 # Read-only restart checks.  In particular, do not call ensure_state_files here.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "$SCRIPT_DIR/../lib/common.sh"
-cfg="${1:-}"; blocked=0; warnings=0; current_user=${USER:-$(id -un)}
+cfg="${1:-}"; scope_reconcile=0; [[ ${2:-} != --allow-scope-reconciliation ]] || scope_reconcile=1; blocked=0; warnings=0; current_user=${USER:-$(id -un)}
 block(){ echo "  BLOCKED: $*"; blocked=1; }; warn(){ echo "  WARNING: $*"; warnings=1; }
 if [[ -z "$cfg" || ! -s "$cfg" ]] || ! bash -n "$cfg"; then echo "Restart readiness: BLOCKED"; echo "  BLOCKED: invalid config: ${cfg:-<unset>}"; exit 2; fi
 if ! load_config "$cfg" || ! validate_config; then echo 'Restart readiness: BLOCKED'; echo '  BLOCKED: config validation failed'; exit 2; fi
@@ -25,14 +25,26 @@ echo 'Sample state:'; total=0
 if [[ ! -s "$STATUS_FILE" ]]; then block "missing state file: $STATUS_FILE"
 else
  [[ "$(head -n1 "$STATUS_FILE")" == "$(state_header)" ]] || block 'manager state schema invalid'
- total=$(awk 'END{print NR-1}' "$STATUS_FILE"); statuses=(PENDING PIPELINE_SUBMITTED PIPELINE_RUNNING PIPELINE_DEFERRED_RETRY PIPELINE_DEFERRED_RUNNING PIPELINE_DEFERRED_FAILED READY_TO_TRANSFER TRANSFERRING LOCAL_FINAL_RETAINED); sum=0
+ total=$(awk 'END{print NR-1}' "$STATUS_FILE"); statuses=(PENDING PIPELINE_SUBMITTED PIPELINE_RUNNING PIPELINE_DEFERRED_RETRY PIPELINE_DEFERRED_RUNNING PIPELINE_DEFERRED_FAILED READY_TO_TRANSFER TRANSFERRING LOCAL_FINAL_RETAINED OUT_OF_SCOPE); sum=0
  for s in "${statuses[@]}"; do c=$(awk -F'\t' -v s="$s" 'NR>1&&$4==s{n++}END{print n+0}' "$STATUS_FILE"); printf '  %-28s %s\n' "$s" "$c"; sum=$((sum+c)); done
- other=$(awk -F'\t' 'NR>1&&$4!~/^(PENDING|PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_DEFERRED_RETRY|PIPELINE_DEFERRED_RUNNING|PIPELINE_DEFERRED_FAILED|READY_TO_TRANSFER|TRANSFERRING|LOCAL_FINAL_RETAINED)$/{n++}END{print n+0}' "$STATUS_FILE"); sum=$((sum+other)); printf '  %-28s %s\n  TOTAL                        %s\n' other/unknown "$other" "$total"
+ other=$(awk -F'\t' 'NR>1&&$4!~/^(PENDING|PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_DEFERRED_RETRY|PIPELINE_DEFERRED_RUNNING|PIPELINE_DEFERRED_FAILED|READY_TO_TRANSFER|TRANSFERRING|LOCAL_FINAL_RETAINED|OUT_OF_SCOPE)$/{n++}END{print n+0}' "$STATUS_FILE"); sum=$((sum+other)); printf '  %-28s %s\n  TOTAL                        %s\n' other/unknown "$other" "$total"
  [[ $sum == "$total" ]] || block "state count sum $sum != rows $total"
  dup=$(awk -F'\t' 'NR>1&&++a[$1]==2{n++}END{print n+0}' "$STATUS_FILE"); adup=$(awk -F'\t' 'NF&&++a[$1]==2{n++}END{print n+0}' "$ASSIGNED_SAMPLE_LIST")
- missing=$(awk -F'\t' 'NR==FNR{if(FNR>1)a[$1]=1;next}NF&&!($1 in a){n++}END{print n+0}' "$STATUS_FILE" "$ASSIGNED_SAMPLE_LIST"); extra=$(awk -F'\t' 'NR==FNR{a[$1]=1;next}FNR>1&&!($1 in a){n++}END{print n+0}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
- echo "  missing manager samples: $missing"; echo "  manager samples not assigned: $extra"; echo "  duplicates: $dup manager, $adup assigned"
- ((dup==0 && adup==0)) || block 'duplicate sample IDs'; ((missing==0 && extra==0)) || block 'manager/assignment sample mismatch'
+ missing=$(awk -F'\t' 'NR==FNR{if(FNR>1)a[$1]=1;next}NF&&!($1 in a){n++}END{print n+0}' "$STATUS_FILE" "$ASSIGNED_SAMPLE_LIST")
+ out_scope=$(awk -F'\t' 'NR==FNR{a[$1]=1;next}FNR>1&&!($1 in a)&&$4=="OUT_OF_SCOPE"{n++}END{print n+0}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+ extra_active=$(awk -F'\t' 'NR==FNR{a[$1]=1;next}FNR>1&&!($1 in a)&&$4~/^(PIPELINE_SUBMITTED|WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING|TRANSFERRING)$/{n++}END{print n+0}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+ extra_runnable=$(awk -F'\t' 'NR==FNR{a[$1]=1;next}FNR>1&&!($1 in a)&&$4!="OUT_OF_SCOPE"&&$4!~/^(PIPELINE_SUBMITTED|WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING|TRANSFERRING)$/{n++}END{print n+0}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+ extra=$((out_scope+extra_active+extra_runnable))
+ readded=$(awk -F'\t' 'NR==FNR{a[$1]=1;next}FNR>1&&($1 in a)&&$4=="OUT_OF_SCOPE"{n++}END{print n+0}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+ echo "  missing manager samples: $missing"; echo "  manager samples not assigned: $extra"; echo "  historical OUT_OF_SCOPE samples: $out_scope"; echo "  duplicates: $dup manager, $adup assigned"
+ ((dup==0 && adup==0)) || block 'duplicate sample IDs'
+ ((missing==0)) || block 'assigned samples are missing from manager state'
+ ((extra_active==0)) || block "$extra_active manager samples outside assignment are actively running; they cannot be retired"
+ if ((extra_runnable>0)); then
+   if ((scope_reconcile)); then warn "$extra_runnable manager samples outside assignment require safe scope reconciliation"
+   else block "$extra_runnable runnable manager samples are outside assignment; run bin/reconcile_assigned_sample_scope.sh CONFIG"; fi
+ fi
+ ((readded==0)) || block "$readded assigned samples remain OUT_OF_SCOPE; explicit audited reactivation is required"
  (( $(awk -F'\t' 'NR>1&&$4=="PIPELINE_DEFERRED_RETRY"{n++}END{print n+0}' "$STATUS_FILE") == 0 )) || warn 'deferred retry samples exist'
  (( $(awk -F'\t' 'NR>1&&$4=="READY_TO_TRANSFER"{n++}END{print n+0}' "$STATUS_FILE") == 0 )) || warn 'samples await transfer'
 fi

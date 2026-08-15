@@ -7,7 +7,7 @@ cfg="${1:-}"; shift || true; dry=0; skip=0; current_user=${USER:-$(id -un)}
 for arg in "$@"; do case "$arg" in --dry-run) dry=1;; --skip-cycle) skip=1;; *) die "unknown option: $arg";; esac; done
 [[ -s "$cfg" ]] || die "Config missing: ${cfg:-<unset>}"; cfg="$(cd "$(dirname "$cfg")"&&pwd)/$(basename "$cfg")"
 MANAGER_ROOT=$(bash -c 'source "$1"; printf %s "$MANAGER_ROOT"' _ "$cfg"); mkdir -p "$MANAGER_ROOT/state/locks"; exec 9>"$MANAGER_ROOT/state/locks/manager_restart.lock"; flock -n 9 || die 'another restart is active'
-"$SCRIPT_DIR/manager_restart_preflight.sh" "$cfg"; load_config "$cfg"; validate_config
+"$SCRIPT_DIR/manager_restart_preflight.sh" "$cfg" --allow-scope-reconciliation; load_config "$cfg"; validate_config
 commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null||echo unknown); tree=clean; [[ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]] || tree=dirty; echo "Git commit: $commit"; echo "Working tree: $tree$([[ $tree == dirty ]]&&echo ' (WARNING)'||true)"
 daemons(){ squeue --noheader --user="$current_user" --name=primate_manager_daemon --states=RUNNING,PENDING --format='%A|%T|%j'|awk -F'|' '$3=="primate_manager_daemon"'; }
 old=$(daemons); old_id=$(awk -F'|' 'NF{print $1;exit}'<<<"$old"); old_id=${old_id:-none}; active=$(awk -F'\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print $1;exit}' "$WAVE_STATUS_FILE"); array=""; [[ -z $active ]]||array=$(wave_field "$active" pipeline_job_id); work=$(work_disk_used_percent)
@@ -20,6 +20,8 @@ printf 'timestamp\t%s\nhostname\t%s\nuser\t%s\nconfig_path\t%s\ngit_commit\t%s\n
 timeout=${MANAGER_RESTART_STOP_TIMEOUT_SECONDS:-120}; poll=${MANAGER_RESTART_POLL_SECONDS:-2}; [[ $timeout =~ ^[1-9][0-9]*$ && $poll =~ ^[1-9][0-9]*$ ]]||die 'invalid restart timeout'; deadline=$((SECONDS+timeout))
 while [[ -n "$(daemons)" ]]; do ((SECONDS<deadline))||die "daemon stop timeout after ${timeout}s; no new daemon submitted"; echo "Waiting for manager daemon $old_id..."; sleep "$poll"; done
 exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8||die 'manager-cycle lock remains busy'; flock -u 8
+# This never cancels work: unsafe/active samples make reconciliation fail.
+"$SCRIPT_DIR/reconcile_assigned_sample_scope.sh" "$cfg"
 # Observation-only reconciliation: these helpers never submit pipeline work.
 "$SCRIPT_DIR/update_wave_states.sh" "$cfg"; [[ $ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE != 1 ]]||"$SCRIPT_DIR/scan_active_results.sh" "$cfg"; "$SCRIPT_DIR/ingest_sample_markers.sh" "$cfg"; "$SCRIPT_DIR/ingest_batch_tasks.sh" "$cfg"; [[ $ARCHIVE_FAILURE_DIAGNOSTICS != 1 ]]||"$SCRIPT_DIR/archive_sample_failure_diagnostics.sh" "$cfg"
 "$SCRIPT_DIR/manager_restart_preflight.sh" "$cfg"

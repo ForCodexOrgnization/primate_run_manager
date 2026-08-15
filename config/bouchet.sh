@@ -20,7 +20,7 @@ PIPELINE_WAVE_SIZE=50
 SAMPLE_CHAIN_CONCURRENCY=10
 # For a one-sample manager smoke test, temporarily set PIPELINE_WAVE_SIZE=1,
 # SAMPLE_CHAIN_CONCURRENCY=1, STREAM_SMOKE_TEST=1, and ENABLE_PIPELINE_SUBMIT=1.
-# Restore these conservative production-disabled values after the test.
+# Restore these reviewed production values after the test.
 STREAM_SMOKE_TEST=0
 IMMEDIATE_SAMPLE_RETRIES=1
 IMMEDIATE_RETRY_DELAY_SECONDS=60

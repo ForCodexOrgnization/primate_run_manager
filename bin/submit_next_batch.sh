@@ -9,6 +9,8 @@ load_config "${1:-}"; validate_config; ensure_state_files
 (( $(active_submission_count) == 0 )) || { log "An active submission already owns the global concurrency budget"; exit 0; }
 determine_manager_phase; phase=$(manager_phase)
 [[ "$phase" != PAUSED_DISK_PRESSURE ]] || { log "Pipeline submission paused by work filesystem pressure"; exit 0; }
+work_used=$(work_disk_used_percent)
+(( work_used < WORK_STOP_SUBMIT_PERCENT )) || { log "Work disk stop-submit threshold reached (${work_used}% >= ${WORK_STOP_SUBMIT_PERCENT}%); existing work is not paused"; exit 0; }
 (( $(disk_used_percent) < STOP_SUBMIT_PERCENT )) || { log "Results disk threshold reached"; exit 0; }
 (( $(local_sample_dir_count) < MAX_LOCAL_SAMPLE_DIRS )) || { log "Local sample directory limit reached"; exit 0; }
 eligible=PENDING; [[ "$phase" == DEFERRED_RETRY ]] && eligible=PIPELINE_DEFERRED_RETRY

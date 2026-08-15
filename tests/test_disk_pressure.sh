@@ -41,19 +41,57 @@ chmod +x "$T/mockbin/squeue" "$T/mockbin/scontrol"
 printf pending > "$T/queue_mode"
 WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null 2>&1
 assert test ! -s "$T/scontrol.log"
+# Stop-submit pressure is not array-admission pressure: full concurrency remains.
+WORK_DISK_USED_PERCENT_OVERRIDE=80 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null 2>&1
+assert test ! -s "$T/scontrol.log"
 WORK_DISK_USED_PERCENT_OVERRIDE=90 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert grep -qx 'hold 700_2' "$T/scontrol.log"
 assert grep -qx 'hold 700_3' "$T/scontrol.log"
 if grep -q '700_1' "$T/scontrol.log"; then exit 1; fi
 assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_disk_holds.tsv")" -eq 2
 # Repeated critical cycles are idempotent.
+printf held > "$T/queue_mode"
 WORK_DISK_USED_PERCENT_OVERRIDE=95 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert test "$(grep -c '^hold ' "$T/scontrol.log")" -eq 2
+# Terminal/cancelled elements disappear from squeue and their records are pruned
+# even while usage remains inside the hysteresis band.
+printf empty > "$T/queue_mode"
+WORK_DISK_USED_PERCENT_OVERRIDE=80 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_disk_holds.tsv")" -eq 0
+printf pending > "$T/queue_mode"
+WORK_DISK_USED_PERCENT_OVERRIDE=90 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 printf held > "$T/queue_mode"
 WORK_DISK_USED_PERCENT_OVERRIDE=75 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert test "$(grep -c '^release ' "$T/scontrol.log")" -eq 2
 assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_disk_holds.tsv")" -eq 0
 assert grep -q '^SAMPLE_CHAIN_CONCURRENCY=10$' "$T/config.sh"
+
+# WORK_STOP_SUBMIT_PERCENT gates only creation of a new submission.
+(
+new_env
+cat >> "$T/config.sh" <<EOF2
+WORK_DISK_CHECK_PATH=$T/work
+WORK_STOP_SUBMIT_PERCENT=75
+WORK_EMERGENCY_CLEAN_PERCENT=82
+WORK_CRITICAL_PERCENT=90
+WORK_ARRAY_RELEASE_PERCENT=70
+EOF2
+printf 'config\n' > "$T/test.config"
+cat > "$T/mockbin/df" <<'MOCK'
+#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\nmock 100 80 20 %s%% /mock\n' "$(cat "$TEST_ROOT/work_used")"
+MOCK
+chmod +x "$T/mockbin/df"
+printf 80 > "$T/work_used"
+"$REPO/bin/initialize_samples.sh" "$T/config.sh" >/dev/null
+stop_log=$("$REPO/bin/submit_next_batch.sh" "$T/config.sh" 2>&1)
+assert grep -q 'Work disk stop-submit threshold reached' <<< "$stop_log"
+assert test ! -e "$T/invocations"
+assert test "$(awk 'END{print NR-1}' "$T/manager/state/wave_status.tsv")" -eq 0
+printf 74 > "$T/work_used"
+"$REPO/bin/submit_next_batch.sh" "$T/config.sh" >/dev/null
+assert test "$(wc -l < "$T/invocations")" -eq 1
+)
 
 # Markerless cancellation cleanup safety matrix.
 awk -F '\t' -v OFS='\t' 'NR==1{print;next} $1~/^s[1235]$/{$4="PIPELINE_DEFERRED_RETRY"} $1=="s4"{$4="READY_TO_TRANSFER"} $1=="s6"{$4="PIPELINE_DEFERRED_FAILED"}{print}' "$T/manager/state/sample_status.tsv" > "$T/x"; mv "$T/x" "$T/manager/state/sample_status.tsv"

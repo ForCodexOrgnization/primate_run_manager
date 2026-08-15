@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/test_helper.sh"
 
-# Bouchet's reviewed transfer automation is enabled, while pipeline submission
-# and imported-incomplete retries remain conservative.
-assert grep -q '^ENABLE_PIPELINE_SUBMIT=0$' "$REPO/config/bouchet.sh"
+# Bouchet's reviewed pipeline and transfer automation are enabled, while
+# imported-incomplete retries remain conservative.
+assert grep -q '^ENABLE_PIPELINE_SUBMIT=1$' "$REPO/config/bouchet.sh"
 assert grep -q '^ENABLE_TRANSFER=1$' "$REPO/config/bouchet.sh"
 assert grep -q '^ENABLE_LOCAL_CLEANUP=1$' "$REPO/config/bouchet.sh"
 assert grep -q '^AUTO_RETRY_IMPORTED_INCOMPLETE=0$' "$REPO/config/bouchet.sh"

@@ -2,6 +2,23 @@
 
 This repository is an external orchestration layer; it does not alter the preprocessing, NUMT, round1, or round2 workflows in `primate_mt_variant_calling`.
 
+## Safe manager-daemon restart
+
+An active variant-calling array does not need to be stopped or changed. Audit readiness with
+`bin/manager_restart_preflight.sh config/mccleary.sh`. Normal operations are one command:
+
+```bash
+bin/restart_manager.sh config/mccleary.sh
+bin/restart_manager.sh config/bouchet.sh
+```
+
+`--dry-run` prints the plan without Slurm or manager-state changes. The normal restart
+snapshots small metadata, gracefully terminates only the current user's
+`primate_manager_daemon`, reconciles observations, runs one normal manager cycle with
+its existing active-submission guards, and starts/verifies one daemon. It never runs
+`git pull` or directly cancels, requeues, holds, or releases a pipeline array.
+`--skip-cycle` is available for an emergency daemon-only restart.
+
 ## Execution model and terminology
 
 ```text

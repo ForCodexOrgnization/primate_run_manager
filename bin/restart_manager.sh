@@ -44,7 +44,7 @@ exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8||die 'manager-
 recovery_result=""
 if ((recover)); then recovery_result=$("$SCRIPT_DIR/reconcile_cancelled_submission.sh" "$cfg" --apply); fi
 # This never cancels work: unsafe/active samples make reconciliation fail.
-"$SCRIPT_DIR/reconcile_assigned_sample_scope.sh" "$cfg"
+MANAGER_CYCLE_LOCK_HELD=1 "$SCRIPT_DIR/reconcile_assigned_sample_scope.sh" "$cfg"
 # The normal cycle's active_submission_count/phase protections are the duplicate
 # submission guard; restart does not bypass or replace them.
 if ((skip)); then :; elif ((recover)); then MANAGER_CYCLE_LOCK_HELD=1 MANAGER_RECOVERY_MODE=1 "$SCRIPT_DIR/manager_cycle.sh" "$cfg"; else flock -u 8; "$SCRIPT_DIR/manager_cycle.sh" "$cfg"; fi

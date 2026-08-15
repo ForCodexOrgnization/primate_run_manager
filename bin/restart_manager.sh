@@ -12,19 +12,26 @@ MANAGER_ROOT=$(bash -c 'source "$1"; printf %s "$MANAGER_ROOT"' _ "$cfg"); mkdir
 commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null||echo unknown); tree=clean; [[ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]] || tree=dirty; echo "Git commit: $commit"; echo "Working tree: $tree$([[ $tree == dirty ]]&&echo ' (WARNING)'||true)"
 daemons(){ squeue --noheader --user="$current_user" --name=primate_manager_daemon --states=RUNNING,PENDING --format='%A|%T|%j'|awk -F'|' '$3=="primate_manager_daemon"'; }
 old=$(daemons); old_id=$(awk -F'|' 'NF{print $1;exit}'<<<"$old"); old_id=${old_id:-none}; active=$(awk -F'\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print $1;exit}' "$WAVE_STATUS_FILE"); array=""; [[ -z $active ]]||array=$(wave_field "$active" pipeline_job_id); work=$(work_disk_used_percent)
+recovery_plan=""
+if ((recover)); then
+  recovery_plan=$("$SCRIPT_DIR/reconcile_cancelled_submission.sh" "$cfg" --dry-run)
+  if [[ $(awk -F= '$1=="nothing_to_recover"{print $2}' <<<"$recovery_plan") != 1 ]]; then
+    active=$(awk -F= '$1=="submission_id"{print $2}' <<<"$recovery_plan")
+    array=$(awk -F= '$1=="pipeline_job_id"{print $2}' <<<"$recovery_plan")
+  fi
+fi
 if ((dry)); then
  if ((recover)); then
    echo 'Recovery dry run: no state, Slurm, daemon, hold, or filesystem changes made.'
-   plan=$("$SCRIPT_DIR/reconcile_cancelled_submission.sh" "$cfg" --dry-run)
-   printf '%s\nOld daemon: %s\nCurrent work filesystem: %s%%\nNew submission allowed by work disk: %s\nDaemon would be restarted: yes\n' "$plan" "$old_id" "$work" "$([[ $work -lt $WORK_STOP_SUBMIT_PERCENT ]] && echo yes || echo 'no (disk pressure)')"
+   printf '%s\nOld submission: %s\nOld Slurm array: %s\nOld daemon: %s\nCurrent work filesystem: %s%%\nNew submission allowed by work disk: %s\nDaemon would be restarted: yes\n' "$recovery_plan" "${active:-none}" "${array:-none}" "$old_id" "$work" "$([[ $work -lt $WORK_STOP_SUBMIT_PERCENT ]] && echo yes || echo 'no (disk pressure)')"
  else
    printf 'Dry run: no Slurm or manager state changes made.\nPlan: snapshot, TERM daemon only, wait, reconcile, %s, submit/verify daemon, status.\nProtected pipeline array: %s\n' "$([[ $skip == 1 ]]&&echo 'skip cycle'||echo 'one guarded cycle')" "${array:-none}"
  fi
  exit 0
 fi
-# Verify cancellation before even stopping the daemon. The apply helper repeats
-# both Slurm queries after the daemon is gone, closing the verification race.
-((recover == 0)) || "$SCRIPT_DIR/reconcile_cancelled_submission.sh" "$cfg" --dry-run >/dev/null
+# The plan above validates cancellation before the daemon is stopped.  The
+# apply helper resolves the target and repeats both Slurm queries immediately
+# before mutation, closing the verification race.
 stamp=$(date -u +%Y%m%dT%H%M%SZ); snap="$MANAGER_ROOT/state/restart_snapshots/$stamp"; i=0; while [[ -e $snap ]]; do i=$((i+1)); snap="$MANAGER_ROOT/state/restart_snapshots/$stamp-$i"; done; mkdir -p "$snap"
 for f in sample_status.tsv wave_status.tsv output_validation.tsv manager_phase.tsv transfer_tasks.tsv streaming_array_disk_holds.tsv; do [[ ! -e "$MANAGER_ROOT/state/$f" ]]||cp -p "$MANAGER_ROOT/state/$f" "$snap/"; done
 for d in submission_task_map array_sample_map; do [[ ! -d "$MANAGER_ROOT/state/$d" ]]||cp -a "$MANAGER_ROOT/state/$d" "$snap/"; done

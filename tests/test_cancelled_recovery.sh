@@ -6,8 +6,11 @@ bash "$REPO/bin/initialize_samples.sh" "$T/config.sh"
 
 cat >"$T/mockbin/squeue" <<'EOF'
 #!/usr/bin/env bash
-[[ -e "$TEST_ROOT/live" ]] && echo RUNNING
-if [[ -e "$TEST_ROOT/invalid_job" ]]; then echo 'squeue: error: Invalid job id specified' >&2; exit 1; fi
+for arg in "$@"; do [[ "$arg" != --jobs* && "$arg" != -j* ]] || { echo 'forbidden job-specific query' >&2; exit 99; }; done
+[[ -e "$TEST_ROOT/live" ]] && echo '12345|1|RUNNING|target'
+[[ -e "$TEST_ROOT/pending" ]] && echo '12345|1-3%1|PENDING|target'
+echo '1234|1|RUNNING|prefix-must-not-match'
+echo '99999|N/A|PENDING|unrelated'
 if [[ -e "$TEST_ROOT/controller_error" ]]; then echo 'slurm_load_jobs error: Socket timed out' >&2; exit 1; fi
 exit 0
 EOF
@@ -35,17 +38,20 @@ grep -q '^retry=1$' <<<"$out"; grep -q '^complete=1$' <<<"$out"; grep -q '^prese
 
 touch "$T/live"
 if bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >"$T/live.out" 2>&1; then echo 'live array accepted' >&2; exit 1; fi
-grep -q 'active pipeline work still exists' "$T/live.out"; [[ "$before" == "$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE")" ]]; rm "$T/live"
+grep -q 'remains present in the live queue' "$T/live.out"; [[ "$before" == "$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE")" ]]; rm "$T/live"
+touch "$T/pending"
+if bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >"$T/pending.out" 2>&1; then echo 'compact pending array accepted' >&2; exit 1; fi
+grep -q 'remains present in the live queue' "$T/pending.out"; rm "$T/pending"
 touch "$T/unknown"
 if bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >"$T/unknown.out" 2>&1; then echo 'ambiguous accounting accepted' >&2; exit 1; fi
 grep -q 'does not establish terminal array elements' "$T/unknown.out"; [[ "$before" == "$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE")" ]]; rm "$T/unknown"
 
-# An old job absent from squeue is safe, but unrelated query failures block.
-touch "$T/invalid_job"
+# An old job absent from the successful whole-user listing is safe, but a
+# controller/query failure blocks without inspecting site-specific stderr.
 bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --dry-run >/dev/null
-rm "$T/invalid_job"; touch "$T/controller_error"
+touch "$T/controller_error"
 if bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --dry-run >"$T/controller.out" 2>&1; then echo 'controller failure accepted' >&2; exit 1; fi
-grep -q 'Slurm squeue query failed' "$T/controller.out"; rm "$T/controller_error"
+grep -q 'live-queue query failed' "$T/controller.out"; rm "$T/controller_error"
 
 bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >"$T/applied"
 assert awk -F'\t' '$1=="old"&&$9=="CANCELLED"{ok=1}END{exit !ok}' "$WAVE_STATUS_FILE"
@@ -71,6 +77,8 @@ source "$REPO/lib/common.sh"; load_config "$T/config.sh"; ensure_state_files
 bash "$REPO/bin/initialize_samples.sh" "$T/config.sh"
 cat >"$T/mockbin/squeue" <<'EOF'
 #!/usr/bin/env bash
+for arg in "$@"; do [[ "$arg" != --jobs* && "$arg" != -j* ]] || exit 99; done
+printf '92115|1|RUNNING|similar\n9999999|N/A|PENDING|unrelated\n'
 exit 0
 EOF
 cat >"$T/mockbin/sacct" <<'EOF'
@@ -84,7 +92,8 @@ cat <<'ROWS'
 9211505_3|FAILED|
 9211505_3.batch|RUNNING|
 9211505_4|COMPLETED|
-9211505_5|CANCELLED|
+9211505_5|TIMEOUT|
+9211505_6|NODE_FAIL|
 ROWS
 EOF
 chmod +x "$T/mockbin/squeue" "$T/mockbin/sacct"
@@ -99,7 +108,7 @@ failed_before=$(awk -F'\t' '$4=="PIPELINE_DEFERRED_FAILED"' "$STATUS_FILE" | sha
 out=$(bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --dry-run)
 grep -q '^target_source=orphaned_sample_wave_id$' <<<"$out"
 grep -q '^wave_status=CANCELLED$' <<<"$out"
-grep -q '^slurm_states=CANCELLED,CANCELLED,FAILED,COMPLETED,CANCELLED$' <<<"$out"
+grep -q '^slurm_states=CANCELLED,CANCELLED,FAILED,COMPLETED,TIMEOUT,NODE_FAIL$' <<<"$out"
 grep -q '^mapped=100$' <<<"$out"; grep -q '^retry=100$' <<<"$out"; grep -q '^preserved_failed=10$' <<<"$out"
 bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >/dev/null
 assert awk -F'\t' 'NR>1&&NR<=101&&($4!="PIPELINE_DEFERRED_RETRY"||$5!=""||$6!=""||$7!=7||$8!=""){exit 1}' "$STATUS_FILE"

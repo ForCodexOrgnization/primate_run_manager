@@ -82,6 +82,65 @@ grep -q 'Manager restart successful' "$T/restart.out"
 grep -q 'WARNING: manager daemon 200 restarted successfully, but final status display failed' "$T/restart.err"
 grep -qx '200|PENDING|primate_manager_daemon' "$T/daemon.queue"
 
+# The real scope reconciler must accept the cycle lock inherited from restart;
+# attempting to reopen/reacquire this lock used to make recovery fail here.
+exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8
+MANAGER_CYCLE_LOCK_HELD=1 bash "$REPO/bin/reconcile_assigned_sample_scope.sh" "$T/config.sh" --dry-run >"$T/inherited-scope.out"
+flock -u 8
+grep -q 'Scope reconciliation: retired=0 blocked=0 dry_run=1' "$T/inherited-scope.out"
+
+# A restart may be resumed after reconciliation has already detached every old
+# owner.  With only deferred retries left, nothing_to_recover is a successful
+# plan result: orchestration must retain the inherited cycle lock across scope
+# reconciliation and the recovery cycle, submit through submit_next_batch, and
+# install exactly one daemon.
+rm -rf "$T/resume-repo"; cp -a "$REPO" "$T/resume-repo"
+cat >"$T/resume-repo/bin/manager_restart_preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"$T/resume-repo/bin/reconcile_assigned_sample_scope.sh" <<'EOF'
+#!/usr/bin/env bash
+[[ "${MANAGER_CYCLE_LOCK_HELD:-0}" == 1 ]] || { echo 'scope lock was not inherited' >&2; exit 1; }
+echo scope >>"$TEST_ROOT/resume.calls"
+EOF
+cat >"$T/resume-repo/bin/manager_cycle.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${MANAGER_CYCLE_LOCK_HELD:-0}" == 1 && "${MANAGER_RECOVERY_MODE:-0}" == 1 ]] || exit 1
+source "$(dirname "$0")/../lib/common.sh"; load_config "$1"; determine_manager_phase
+[[ $(manager_phase) == DEFERRED_RETRY ]] || { echo "wrong phase: $(manager_phase)" >&2; exit 1; }
+echo cycle >>"$TEST_ROOT/resume.calls"
+bash "$(dirname "$0")/submit_next_batch.sh" "$1"
+EOF
+cat >"$T/resume-repo/bin/stop_manager_daemon.sh" <<'EOF'
+#!/usr/bin/env bash
+: >"$TEST_ROOT/daemon.queue"
+EOF
+cat >"$T/resume-repo/bin/submit_manager_daemon.sh" <<'EOF'
+#!/usr/bin/env bash
+echo daemon >>"$TEST_ROOT/resume.calls"
+printf '300|PENDING|primate_manager_daemon\n' >"$TEST_ROOT/daemon.queue"
+echo 'Submitted manager daemon Slurm job 300'
+EOF
+cat >"$T/resume-repo/bin/show_status.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$T/resume-repo/bin/"*.sh
+awk -F'\t' -v OFS='\t' 'NR==1{print;next}{$4="PIPELINE_DEFERRED_RETRY";$5="";$6="";$7=4;print}' "$STATUS_FILE" >"$STATUS_FILE.resume"; mv "$STATUS_FILE.resume" "$STATUS_FILE"
+awk -F'\t' 'NR==1{print}' "$WAVE_STATUS_FILE" >"$WAVE_STATUS_FILE.resume"; mv "$WAVE_STATUS_FILE.resume" "$WAVE_STATUS_FILE"
+: >"$T/resume.calls"; rm -f "$T/invocations"; printf '100|RUNNING|primate_manager_daemon\n' >"$T/daemon.queue"
+MANAGER_RESTART_VERIFY_DELAY_SECONDS=0 bash "$T/resume-repo/bin/restart_manager.sh" "$T/config.sh" --recover-cancelled >"$T/resume.out"
+grep -q '^target_source=none$' "$T/resume.out"; grep -q '^nothing_to_recover=1$' "$T/resume.out"
+[[ $(grep -c '^scope$' "$T/resume.calls") == 1 ]]
+[[ $(grep -c '^cycle$' "$T/resume.calls") == 1 ]]
+[[ $(grep -c '^daemon$' "$T/resume.calls") == 1 ]]
+[[ $(wc -l <"$T/invocations") == 1 ]]
+assert awk -F'\t' 'NR>1&&$9=="SUBMITTED"&&$11~/phase=DEFERRED_RETRY/{ok=1}END{exit !ok}' "$WAVE_STATUS_FILE"
+grep -qx '300|PENDING|primate_manager_daemon' "$T/daemon.queue"
+[[ -d "$T/work" ]]
+
 # Genuine cycle failure remains fatal and occurs before daemon submission.
 : >"$T/restart.calls"; touch "$T/fail-cycle"
 printf '100|RUNNING|primate_manager_daemon\n' >"$T/daemon.queue"

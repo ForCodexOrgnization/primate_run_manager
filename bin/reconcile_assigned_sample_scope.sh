@@ -9,8 +9,13 @@ load_config "$cfg"; validate_config; [[ -s "$STATUS_FILE" ]] || die "Missing man
 mkdir -p "$MANAGER_ROOT/state/receipts/sample_scope_reconciliation" "$PIPELINE_WORK_ROOT/.locks"
 # A scan writes output_validation under the manager cycle. Holding this lock for
 # the reconciliation closes the check/update race and proves validation is idle.
-exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"
-flock -n 8 || die "manager cycle/output validation is active; scope reconciliation refused"
+# restart_manager deliberately keeps that lock across recovery reconciliation,
+# scope reconciliation, and the recovery cycle.  Do not reopen fd 8 in the
+# child: doing so would discard the inherited lock before reacquiring it.
+if [[ "${MANAGER_CYCLE_LOCK_HELD:-0}" != 1 ]]; then
+  exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"
+  flock -n 8 || die "manager cycle/output validation is active; scope reconciliation refused"
+fi
 
 assigned_tmp=$(mktemp); trap 'rm -f "$assigned_tmp"' EXIT
 awk -F '\t' 'NF{print $1}' "$ASSIGNED_SAMPLE_LIST" > "$assigned_tmp"

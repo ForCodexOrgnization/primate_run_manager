@@ -52,7 +52,17 @@ fi
 
 # squeue is authoritative for liveness. Query the whole array so a live child
 # cannot be hidden by a terminal parent accounting row.
-queue=$(squeue --noheader --jobs="$job" --format='%T' 2>/dev/null) || die "Slurm squeue query failed; recovery did not modify state"
+queue_error=$(mktemp); trap 'rm -f "$queue_error"' EXIT
+if ! queue=$(squeue --noheader --jobs="$job" --format='%T' 2>"$queue_error"); then
+  # McCleary returns this error for an old job which is no longer in squeue.
+  # Accept only that precise diagnostic; controller and transport failures
+  # remain fatal.
+  if ! awk 'NF && $0 !~ /^(squeue: error: )?Invalid job id specified[.]?$/ {bad=1} END{exit bad}' "$queue_error" ||
+     ! grep -q 'Invalid job id specified' "$queue_error"; then
+    die "Slurm squeue query failed; recovery did not modify state"
+  fi
+  queue=""
+fi
 while IFS= read -r state; do
   [[ -z "$state" ]] && continue
   if slurm_state_is_active "$state" || [[ "$(slurm_normalize_state "$state")" != CANCELLED ]]; then
@@ -63,13 +73,19 @@ done <<<"$queue"
 
 command -v sacct >/dev/null 2>&1 || die "Slurm accounting unavailable; recovery did not modify state"
 accounting=$(sacct -n -j "$job" --format=JobID,State --parsable2 2>/dev/null) || die "Slurm accounting query failed; recovery did not modify state"
-cancelled=0; ambiguous=0; states=""
+cancelled=0; discovered=0; nonterminal=0; states=""
 while IFS='|' read -r jid state _; do
   [[ -n "$jid" && -n "$state" ]] || continue
+  [[ "$jid" =~ ^${job}_[0-9]+$ ]] || continue
+  discovered=$((discovered + 1))
   state=$(slurm_normalize_state "$state"); states="${states}${states:+,}$state"
-  case "$state" in CANCELLED) cancelled=1;; COMPLETED) :;; *) ambiguous=1;; esac
+  [[ "$state" == CANCELLED ]] && cancelled=1
+  slurm_state_is_terminal "$state" || nonterminal=1
 done <<<"$accounting"
-((cancelled == 1 && ambiguous == 0)) || die "Slurm accounting does not unambiguously prove cancellation (states: ${states:-none}); recovery did not modify state"
+((discovered > 0 && nonterminal == 0)) || die "Slurm accounting does not establish terminal array elements (states: ${states:-none}); recovery did not modify state"
+if [[ "$target_source" == active_submission ]] && ((cancelled == 0)); then
+  die "Slurm accounting does not prove cancellation (states: ${states:-none}); recovery did not modify state"
+fi
 
 if [[ "$target_source" == orphaned_sample_wave_id ]]; then
   mapped=$(awk -F '\t' -v w="$sid" 'NR==FNR{if(NR>1) member[$8]=1;next} NR>1&&$6==w&&$4~/^(PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_DEFERRED_RUNNING)$/&&member[$1]{n++} END{print n+0}' "$map" "$STATUS_FILE")

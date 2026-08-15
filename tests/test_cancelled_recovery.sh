@@ -7,11 +7,13 @@ bash "$REPO/bin/initialize_samples.sh" "$T/config.sh"
 cat >"$T/mockbin/squeue" <<'EOF'
 #!/usr/bin/env bash
 [[ -e "$TEST_ROOT/live" ]] && echo RUNNING
+if [[ -e "$TEST_ROOT/invalid_job" ]]; then echo 'squeue: error: Invalid job id specified' >&2; exit 1; fi
+if [[ -e "$TEST_ROOT/controller_error" ]]; then echo 'slurm_load_jobs error: Socket timed out' >&2; exit 1; fi
 exit 0
 EOF
 cat >"$T/mockbin/sacct" <<'EOF'
 #!/usr/bin/env bash
-[[ -e "$TEST_ROOT/unknown" ]] && echo '12345|UNKNOWN|' || echo '12345|CANCELLED by 1000|'
+[[ -e "$TEST_ROOT/unknown" ]] && echo '12345_1|UNKNOWN|' || echo '12345_1|CANCELLED by 1000|'
 EOF
 chmod +x "$T/mockbin/squeue" "$T/mockbin/sacct"
 
@@ -36,7 +38,14 @@ if bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >"$
 grep -q 'active pipeline work still exists' "$T/live.out"; [[ "$before" == "$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE")" ]]; rm "$T/live"
 touch "$T/unknown"
 if bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >"$T/unknown.out" 2>&1; then echo 'ambiguous accounting accepted' >&2; exit 1; fi
-grep -q 'does not unambiguously prove cancellation' "$T/unknown.out"; [[ "$before" == "$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE")" ]]; rm "$T/unknown"
+grep -q 'does not establish terminal array elements' "$T/unknown.out"; [[ "$before" == "$(sha256sum "$STATUS_FILE" "$WAVE_STATUS_FILE")" ]]; rm "$T/unknown"
+
+# An old job absent from squeue is safe, but unrelated query failures block.
+touch "$T/invalid_job"
+bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --dry-run >/dev/null
+rm "$T/invalid_job"; touch "$T/controller_error"
+if bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --dry-run >"$T/controller.out" 2>&1; then echo 'controller failure accepted' >&2; exit 1; fi
+grep -q 'Slurm squeue query failed' "$T/controller.out"; rm "$T/controller_error"
 
 bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >"$T/applied"
 assert awk -F'\t' '$1=="old"&&$9=="CANCELLED"{ok=1}END{exit !ok}' "$WAVE_STATUS_FILE"
@@ -66,7 +75,17 @@ exit 0
 EOF
 cat >"$T/mockbin/sacct" <<'EOF'
 #!/usr/bin/env bash
-echo '9211505|CANCELLED by 1000|'
+cat <<'ROWS'
+9211505|CANCELLED by 1000|
+9211505_1|CANCELLED by 1000|
+9211505_1.batch|FAILED|
+9211505_1.extern|UNKNOWN|
+9211505_2|CANCELLED|
+9211505_3|FAILED|
+9211505_3.batch|RUNNING|
+9211505_4|COMPLETED|
+9211505_5|CANCELLED|
+ROWS
 EOF
 chmod +x "$T/mockbin/squeue" "$T/mockbin/sacct"
 printf 'old_cancelled\tmanifest\t100\t9211505\tnow\tCANCELLED\t0\t100\tCANCELLED\tnow\talready reconciled\n' >>"$WAVE_STATUS_FILE"
@@ -80,6 +99,7 @@ failed_before=$(awk -F'\t' '$4=="PIPELINE_DEFERRED_FAILED"' "$STATUS_FILE" | sha
 out=$(bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --dry-run)
 grep -q '^target_source=orphaned_sample_wave_id$' <<<"$out"
 grep -q '^wave_status=CANCELLED$' <<<"$out"
+grep -q '^slurm_states=CANCELLED,CANCELLED,FAILED,COMPLETED,CANCELLED$' <<<"$out"
 grep -q '^mapped=100$' <<<"$out"; grep -q '^retry=100$' <<<"$out"; grep -q '^preserved_failed=10$' <<<"$out"
 bash "$REPO/bin/reconcile_cancelled_submission.sh" "$T/config.sh" --apply >/dev/null
 assert awk -F'\t' 'NR>1&&NR<=101&&($4!="PIPELINE_DEFERRED_RETRY"||$5!=""||$6!=""||$7!=7||$8!=""){exit 1}' "$STATUS_FILE"

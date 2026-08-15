@@ -4,7 +4,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "${SCRIPT_DIR
 cfg="${1:-${RUN_MANAGER_CONFIG:-}}"; [[ -s "$cfg" ]] || die "Config missing"
 # Read only MANAGER_ROOT to locate the global lock, then perform normal loading/validation.
 MANAGER_ROOT=$(bash -c 'source "$1"; printf "%s" "$MANAGER_ROOT"' _ "$cfg")
-mkdir -p "$MANAGER_ROOT/state/locks"; exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8 || { log "Another manager cycle is active"; exit 0; }
+mkdir -p "$MANAGER_ROOT/state/locks"
+if [[ "${MANAGER_CYCLE_LOCK_HELD:-0}" != 1 ]]; then
+  exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8 || { log "Another manager cycle is active"; exit 0; }
+fi
 load_config "$cfg"; ensure_state_files; validate_config
 # In streaming mode this updates submission audit metadata only; it never gates
 # per-sample reconciliation or transfer readiness.
@@ -23,7 +26,11 @@ if [[ "$PIPELINE_MODE" != streaming_per_sample ]]; then
     "${SCRIPT_DIR}/cleanup_terminal_deferred_wave_workdirs.sh" "$cfg"
 fi
 work_used=$(work_disk_used_percent)
-if [[ "$PIPELINE_MODE" == streaming_per_sample ]] && (( work_used >= FAILED_CACHE_CLEAN_TRIGGER_PERCENT )); then
+# Recovery preserves reusable Nextflow caches; ordinary later cycles retain the
+# existing guarded cleanup policy.
+if [[ "${MANAGER_RECOVERY_MODE:-0}" == 1 ]]; then
+    log "Recovery cycle: preserving pipeline work/cache directories"
+elif [[ "$PIPELINE_MODE" == streaming_per_sample ]] && (( work_used >= FAILED_CACHE_CLEAN_TRIGGER_PERCENT )); then
     "${SCRIPT_DIR}/cleanup_old_failed_sample_workdirs.sh" "$cfg"
 elif (( work_used >= WORK_EMERGENCY_CLEAN_PERCENT )); then
     "${SCRIPT_DIR}/cleanup_orphan_wave_workdirs.sh" "$cfg" --apply

@@ -230,7 +230,65 @@ update_wave_row() {
 }
 slurm_normalize_state() { local s="${1%% *}"; s="${s%+}"; printf '%s\n' "$s"; }
 slurm_state_is_active() { case "$(slurm_normalize_state "$1")" in PENDING|RUNNING|CONFIGURING|COMPLETING|REQUEUED|RESIZING|SUSPENDED) return 0;; *) return 1;; esac; }
-slurm_state_is_terminal() { case "$(slurm_normalize_state "$1")" in COMPLETED|FAILED|CANCELLED|TIMEOUT|PREEMPTED|NODE_FAIL|OUT_OF_MEMORY|BOOT_FAIL) return 0;; *) return 1;; esac; }
+slurm_state_is_terminal() { case "$(slurm_normalize_state "$1")" in COMPLETED|FAILED|CANCELLED|TIMEOUT|PREEMPTED|NODE_FAIL|OUT_OF_MEMORY|BOOT_FAIL|DEADLINE|REVOKED|SPECIAL_EXIT) return 0;; *) return 1;; esac; }
+
+# Query the live queue once, without asking Slurm to resolve a possibly expired
+# job ID.  %A is the exact array master ID for both expanded elements and
+# compact pending-array rows; comparing that field numerically avoids prefix
+# matches.  Exit 2 means the queue query itself failed.
+slurm_live_job_rows() {
+    local user="$1" job="$2" listing
+    listing=$(squeue --noheader --user="$user" --format='%A|%a|%T|%j') || return 2
+    awk -F'|' -v job="$job" '$1==job {print}' <<<"$listing"
+}
+
+# Print one of LIVE, TERMINAL, ACCOUNTING_UNAVAILABLE,
+# ACCOUNTING_AMBIGUOUS, or QUERY_ERROR.  For TERMINAL an additional stable
+# states= line describes only true top-level array elements.
+slurm_cancelled_recovery_contract() {
+    local user="$1" job="$2" rows accounting jid state
+    if ! rows=$(slurm_live_job_rows "$user" "$job"); then printf 'QUERY_ERROR\n'; return; fi
+    if [[ -n "${rows//$'\n'/}" ]]; then printf 'LIVE\n'; return; fi
+    command -v sacct >/dev/null 2>&1 || { printf 'ACCOUNTING_UNAVAILABLE\n'; return; }
+    accounting=$(sacct -n -j "$job" --format=JobID,State --parsable2 2>/dev/null) || { printf 'ACCOUNTING_UNAVAILABLE\n'; return; }
+    local discovered=0 cancelled=0 ambiguous=0 states=""
+    while IFS='|' read -r jid state _; do
+        [[ "$jid" =~ ^${job}_[0-9]+$ ]] || continue
+        discovered=$((discovered + 1)); state=$(slurm_normalize_state "$state")
+        states="${states}${states:+,}$state"; [[ "$state" == CANCELLED ]] && cancelled=1
+        slurm_state_is_terminal "$state" || ambiguous=1
+    done <<<"$accounting"
+    if ((discovered == 0)); then printf 'ACCOUNTING_UNAVAILABLE\n'; return; fi
+    if ((ambiguous)); then printf 'ACCOUNTING_AMBIGUOUS\nstates=%s\n' "$states"; return; fi
+    printf 'TERMINAL\nstates=%s\ncancellation_evidence=%s\n' "$states" "$cancelled"
+}
+
+# Resolve the sole authoritative recovery owner.  This function performs no
+# Slurm queries and no mutation, so planners and appliers share discovery.
+resolve_cancelled_recovery_target() {
+    local -a active orphaned; local sid source matches status job map row
+    mapfile -t active < <(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print $1}' "$WAVE_STATUS_FILE")
+    if ((${#active[@]} > 1)); then die "recovery blocked: multiple active submissions: ${active[*]}"; fi
+    if ((${#active[@]} == 1)); then sid=${active[0]}; source=active_submission
+    else
+        mapfile -t orphaned < <(awk -F '\t' 'NR>1&&$4~/^(PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_DEFERRED_RUNNING)$/&&$6!=""{n[$6]++}END{for(w in n)print w"\t"n[w]}' "$STATUS_FILE" | sort)
+        if ((${#orphaned[@]} == 0)); then printf 'target_source=none\nnothing_to_recover=1\n'; return; fi
+        if ((${#orphaned[@]} > 1)); then printf 'recovery blocked: orphaned running samples reference multiple waves:\n' >&2; printf '  %s\n' "${orphaned[@]}" >&2; return 1; fi
+        sid=${orphaned[0]%%$'\t'*}; source=orphaned_sample_wave_id
+        matches=$(awk -F '\t' -v w="$sid" 'NR>1&&$1==w{n++}END{print n+0}' "$WAVE_STATUS_FILE")
+        ((matches == 1)) || die "orphaned sample wave $sid does not resolve to exactly one wave_status row (found $matches)"
+        status=$(wave_field "$sid" status); [[ "$status" == CANCELLED ]] || die "orphaned sample wave $sid must be CANCELLED (status: ${status:-empty})"
+    fi
+    status=$(wave_field "$sid" status); job=$(wave_field "$sid" pipeline_job_id)
+    [[ "$job" =~ ^[0-9]+$ ]] || die "recovery submission $sid has no valid pipeline job ID"
+    map="$MANAGER_ROOT/state/submission_task_map/$sid.tsv"; [[ -s "$map" ]] || die "submission task map missing: $map"
+    if [[ "$source" == orphaned_sample_wave_id ]]; then
+        while IFS= read -r row; do
+            awk -F '\t' -v s="$row" 'NR>1&&$8==s{ok=1}END{exit !ok}' "$map" || die "orphaned running sample $row is not present in submission task map for $sid"
+        done < <(awk -F '\t' -v w="$sid" 'NR>1&&$6==w&&$4~/^(PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_DEFERRED_RUNNING)$/{print $1}' "$STATUS_FILE")
+    fi
+    printf 'target_source=%s\nsubmission_id=%s\nwave_status=%s\npipeline_job_id=%s\nmap_file=%s\nnothing_to_recover=0\n' "$source" "$sid" "$status" "$job" "$map"
+}
 manager_wave_state_is_active() { case "$1" in CREATED|SUBMITTED|RUNNING) return 0;; *) return 1;; esac; }
 active_wave_count() { awk -F '\t' 'NR>1 && $9 ~ /^(CREATED|SUBMITTED|RUNNING)$/ {n++} END{print n+0}' "$WAVE_STATUS_FILE"; }
 samples_in_wave() { local wave="${1:-}"; awk -F '\t' -v w="$wave" 'NR>1 && $6!="" && (w==""||$6==w) && $4 ~ /^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING)$/ {print $1}' "$STATUS_FILE"; }

@@ -3,7 +3,8 @@ HPC_NAME="BOUCHET"
 MANAGER_ROOT="/nfs/roberts/project/pi_njl27/lt692/primate_run_manager"
 PIPELINE_REPO="/nfs/roberts/project/pi_njl27/lt692/primate_mt_variant_calling"
 PIPELINE_MODE="streaming_per_sample"
-PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_streaming_per_sample.sh"
+STREAMING_PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_streaming_per_sample.sh"
+BATCH_PIPELINE_LAUNCHER="${PIPELINE_REPO}/launch_pipeline_all_per_batch.sh"
 PIPELINE_CONFIG="${PIPELINE_REPO}/nextflow.config"
 ASSIGNED_SAMPLE_LIST="${MANAGER_ROOT}/samples/bouchet_sample_list_update.txt"
 LOCAL_RESULTS="/nfs/roberts/pi/pi_njl27/lt692/primate_results"
@@ -14,8 +15,8 @@ PIPELINE_WORK_ROOT="/nfs/roberts/scratch/pi_njl27/lt692/nf_work_dir_all_per_batc
 GLOBAL_REF_DIR="/home/lt692/scratch_pi_njl27/lt692/primate_mtDNA_analysis/references/variant_calling/Ref_whole"
 REF_DIR="/home/lt692/scratch_pi_njl27/lt692/primate_mtDNA_analysis/references/variant_calling/Ref_chrM"
 NUCLEAR_ONLY_REF_DIR="/home/lt692/scratch_pi_njl27/lt692/primate_mtDNA_analysis/references/variant_calling/nuclear_only_refs"
-# Conservative first-deployment values. Increase PIPELINE_WAVE_SIZE to 50 and
-# CHAIN_CONCURRENT_BATCHES to 3 after the initial test.
+# PIPELINE_WAVE_SIZE and CHAIN_CONCURRENT_BATCHES are retained for compatibility;
+# task-native streaming concurrency is controlled by SAMPLE_CHAIN_CONCURRENCY.
 PIPELINE_WAVE_SIZE=50
 SAMPLE_CHAIN_CONCURRENCY=10
 # For a one-sample manager smoke test, temporarily set PIPELINE_WAVE_SIZE=1,
@@ -69,9 +70,11 @@ REQUIRE_SLURM_FOR_EXISTING_IMPORT=1
 ALLOW_INTERACTIVE_IMPORT=0
 SAMTOOLS_QUICKCHECK_TIMEOUT_SECONDS=600
 NEXTFLOW_MODULE="Nextflow/25.04.6"
+export NEXTFLOW_MODULE
 MANAGER_POLL_SECONDS=1800
 # Bouchet's daemon walltime is independently configurable for its QOS.
 MANAGER_DAEMON_TIME="23:30:00"
+DISK_PRESSURE_POLL_SECONDS=60
 PIPELINE_QUEUE_POLICY="new_first"
 DEFER_RETRY_UNTIL_PENDING_EMPTY=1
 ENABLE_DEFERRED_RETRY=1
@@ -82,6 +85,7 @@ WORK_DISK_CHECK_PATH="${PIPELINE_WORK_ROOT}"
 WORK_STOP_SUBMIT_PERCENT=75
 WORK_EMERGENCY_CLEAN_PERCENT=82
 WORK_CRITICAL_PERCENT=90
+WORK_ARRAY_RELEASE_PERCENT=75
 FAILED_CACHE_CLEAN_TRIGGER_PERCENT=70
 FAILED_CACHE_CLEAN_TARGET_PERCENT=65
 ENABLE_ORPHAN_WORK_CLEANUP=1

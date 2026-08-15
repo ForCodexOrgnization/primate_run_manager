@@ -285,11 +285,27 @@ deferred_terminal_status() {
     fi
 }
 normal_active_wave_count() { awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/&&$11!~/phase=DEFERRED_RETRY/{n++}END{print n+0}' "$WAVE_STATUS_FILE"; }
+normal_active_streaming_task_count() {
+    local file job task phase state active=0
+    # Exact task state is authoritative once Slurm exposes it.  Submission audit
+    # state is the conservative fallback during the short post-sbatch interval
+    # before the array elements appear in accounting.
+    for file in "${MANAGER_ROOT}"/state/submission_task_map/*.tsv; do
+        [[ -e "$file" ]] || continue
+        while IFS=$'\t' read -r phase job task; do
+            [[ "$phase" != DEFERRED_RETRY ]] || continue
+            state=$(submission_task_state "$job" "$task")
+            slurm_state_is_active "$state" && active=$((active + 1))
+        done < <(awk -F '\t' 'NR>1&&!seen[$4 FS $5]++{print $3"\t"$4"\t"$5}' "$file")
+    done
+    (( active > 0 )) && { printf '%s\n' "$active"; return; }
+    normal_active_wave_count
+}
 determine_manager_phase() {
     local used pending active deferred phase reason tmp
     used=$(work_disk_used_percent); pending=$(awk -F '\t' 'NR>1&&$4=="PENDING"{n++}END{print n+0}' "$STATUS_FILE")
     if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
-        active=$(awk -F '\t' 'NR>1&&$4~/^(WAVE_SUBMITTED|PIPELINE_SUBMITTED|PIPELINE_RUNNING)$/{n++}END{print n+0}' "$STATUS_FILE")
+        active=$(normal_active_streaming_task_count)
     else active=$(normal_active_wave_count); fi
     deferred=$(awk -F '\t' 'NR>1&&$4=="PIPELINE_DEFERRED_RETRY"{n++}END{print n+0}' "$STATUS_FILE")
     if (( used >= WORK_CRITICAL_PERCENT )); then phase=PAUSED_DISK_PRESSURE; reason="critical work filesystem ${used}%";

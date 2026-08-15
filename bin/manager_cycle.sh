@@ -39,4 +39,6 @@ if (( work_used >= WORK_CRITICAL_PERCENT )); then log "CRITICAL: work filesystem
 "${SCRIPT_DIR}/cleanup_transferred_samples.sh" "$cfg"
 "${SCRIPT_DIR}/submit_globus_batch.sh" "$cfg"
 [[ "$(manager_phase)" != PAUSED_DISK_PRESSURE && "$work_used" -lt "$WORK_CRITICAL_PERCENT" ]] && "${SCRIPT_DIR}/submit_next_batch.sh" "$cfg"
-"${SCRIPT_DIR}/show_status.sh" "$cfg"
+# Status rendering is informational.  Reconciliation and submission failures above
+# remain fatal, but a display-only problem must not make restart leave no daemon.
+"${SCRIPT_DIR}/show_status.sh" "$cfg" || log "WARNING: manager cycle completed, but status display failed"

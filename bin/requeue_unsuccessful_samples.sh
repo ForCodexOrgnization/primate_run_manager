@@ -25,7 +25,8 @@ check_reconciled() {
 
 build_preview() {
     local output=$1
-    awk -F '\t' -v OFS='\t' '
+    awk -F '\t' -v OFS='\t' -v assigned="$ASSIGNED_SAMPLE_LIST" '
+      BEGIN {while((getline line < assigned)>0){split(line,a,"\t"); cohort[a[1]]=1} close(assigned)}
       FNR==NR {
         if (FNR==1) {for(i=1;i<=NF;i++) vh[$i]=i; next}
         if (vh["sample_id"] && vh["overall_complete"] && $vh["overall_complete"]==1)
@@ -34,7 +35,7 @@ build_preview() {
       }
       NR==FNR+1 { }
       FILENAME != ARGV[1] && FNR==1 {for(i=1;i<=NF;i++) sh[$i]=i; next}
-      FILENAME != ARGV[1] && $sh["status"]~/^(PENDING|PIPELINE_DEFERRED_RETRY|PIPELINE_FAILED|PIPELINE_INCOMPLETE_REVIEW)$/ && !complete[$sh["sample_id"]] {
+      FILENAME != ARGV[1] && ($sh["sample_id"] in cohort) && $sh["status"]~/^(PENDING|PIPELINE_DEFERRED_RETRY|PIPELINE_FAILED|PIPELINE_INCOMPLETE_REVIEW)$/ && !complete[$sh["sample_id"]] {
         print $sh["sample_id"],$sh["status"],$sh["pipeline_attempts"],$sh["last_pipeline_error"],"PENDING"
       }
     ' "$VALIDATION_FILE" "$STATUS_FILE" > "$output"

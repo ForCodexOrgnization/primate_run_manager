@@ -8,6 +8,7 @@ PIPELINE_WORK_ROOT=$T/work
 EOF
 mkdir -p "$T/manager/state/locks"
 source "$REPO/lib/common.sh"; load_config "$T/config.sh"
+printf 'eligible\tsp\ncomplete\tsp\nsuccess\tsp\npending\tsp\n' > "$ASSIGNED_SAMPLE_LIST"
 state_header > "$STATUS_FILE"
 printf 'eligible\tsp\tTEST\tPIPELINE_FAILED\t99\toldwave\t4\told error\t\t/path\tFAILED\t\told\told note\n' >> "$STATUS_FILE"
 printf 'complete\tsp\tTEST\tPIPELINE_FAILED\t99\toldwave\t3\tstale\t\t/path\t\t\told\tstale\n' >> "$STATUS_FILE"

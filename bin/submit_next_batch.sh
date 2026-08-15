@@ -14,7 +14,9 @@ work_used=$(work_disk_used_percent)
 (( $(disk_used_percent) < STOP_SUBMIT_PERCENT )) || { log "Results disk threshold reached"; exit 0; }
 (( $(local_sample_dir_count) < MAX_LOCAL_SAMPLE_DIRS )) || { log "Local sample directory limit reached"; exit 0; }
 eligible=PENDING; [[ "$phase" == DEFERRED_RETRY ]] && eligible=PIPELINE_DEFERRED_RETRY
-mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR>1&&$4==s{print $1}' "$STATUS_FILE")
+# Eligibility is both an explicit runnable status and current cohort membership.
+# This deliberately makes terminal OUT_OF_SCOPE rows impossible to submit.
+mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR==FNR{if(NF)a[$1]=1;next}NR>FNR&&FNR>1&&$4==s&&($1 in a){print $1}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
 ((${#samples[@]})) || { log "No eligible samples"; exit 0; }
 required=${#samples[@]}; [[ "$PIPELINE_MODE" == batch ]] && required=$(( (${#samples[@]} + PIPELINE_BATCH_SIZE - 1) / PIPELINE_BATCH_SIZE ))
 if command -v scontrol >/dev/null 2>&1; then

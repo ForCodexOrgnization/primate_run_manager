@@ -8,12 +8,22 @@ FAILED_CACHE_CLEAN_TRIGGER_PERCENT=1
 FAILED_CACHE_CLEAN_TARGET_PERCENT=1
 WORK_DISK_CHECK_PATH=$T/work
 EOF
-mkdir -p "$T/work/S1" "$T/work/S1.stale.20260815T010203Z.12" "$T/work/S1.stale.bad.13" "$T/work/.locks"
+mkdir -p "$T/work/S1" "$T/work/S2" "$T/work/S3" \
+    "$T/work/S1.stale.20260815T010203Z.12" \
+    "$T/work/S1.stale.bad" "$T/work/S1.stale.20260816.1234" "$T/work/.locks"
 echo canonical > "$T/work/S1/data"; echo stale > "$T/work/S1.stale.20260815T010203Z.12/data"
+cat > "$T/mockbin/du" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}" >> "$TEST_ROOT/du_paths"
+exec /usr/bin/du "$@"
+MOCK
+chmod +x "$T/mockbin/du"
 dry=$(WORK_DISK_USED_PERCENT_OVERRIDE=99 "$REPO/bin/cleanup_stale_sample_workdirs.sh" "$T/config.sh" --dry-run 2>&1)
 assert test -d "$T/work/S1.stale.20260815T010203Z.12"
 assert grep -q 'decision=ELIGIBLE reason=detached_stale_generation' <<< "$dry"
-assert grep -q 'stale.bad.13.*decision=PROTECTED reason=unsafe_path' <<< "$dry"
+assert test "$(wc -l < "$T/du_paths")" -eq 1
+assert grep -Fxq "$T/work/S1.stale.20260815T010203Z.12" "$T/du_paths"
+assert test -z "$(grep 'stale.bad\|stale.20260816' <<< "$dry" || true)"
 # A live sample lock protects its detached generation.
 flock "$T/work/.locks/S1.lock" -c 'sleep 3' & locker=$!; sleep .1
 locked=$(WORK_DISK_USED_PERCENT_OVERRIDE=99 "$REPO/bin/cleanup_stale_sample_workdirs.sh" "$T/config.sh" --apply 2>&1)
@@ -37,7 +47,8 @@ printf FAILED > "$T/task_state"
 WORK_DISK_USED_PERCENT_OVERRIDE=99 "$REPO/bin/cleanup_stale_sample_workdirs.sh" "$T/config.sh" --apply >/dev/null
 assert test -d "$T/work/S1"
 assert test ! -d "$T/work/S1.stale.20260815T010203Z.12"
-assert test -d "$T/work/S1.stale.bad.13"
+assert test -d "$T/work/S1.stale.bad"
+assert test -d "$T/work/S1.stale.20260816.1234"
 receipt=$(find "$T/manager/state/receipts/stale_sample_work_cleanup" -type f | head -1)
 assert grep -q $'sample_id\tstale_path\tbytes_released\tcleanup_time\teligibility_reason\twork_filesystem_usage_before_cleanup' "$receipt"
 assert grep -q 'detached_stale_generation' "$receipt"

@@ -26,10 +26,17 @@ if [[ "$PIPELINE_MODE" != streaming_per_sample ]]; then
     "${SCRIPT_DIR}/cleanup_terminal_deferred_wave_workdirs.sh" "$cfg"
 fi
 work_used=$(work_disk_used_percent)
-# Recovery preserves reusable Nextflow caches; ordinary later cycles retain the
-# existing guarded cleanup policy.
+# Close array admission before any potentially slow size/deletion work. This is
+# intentionally ahead of GC so a 100%-full filesystem cannot start more tasks.
+WORK_DISK_USED_PERCENT_OVERRIDE="$work_used" "${SCRIPT_DIR}/control_streaming_array_admission.sh" "$cfg"
+# Detached quarantine generations are not reusable caches. Reclaim them first,
+# including during recovery; recovery continues to preserve canonical caches.
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]] && (( work_used >= FAILED_CACHE_CLEAN_TRIGGER_PERCENT )); then
+    "${SCRIPT_DIR}/cleanup_stale_sample_workdirs.sh" "$cfg" --apply
+    work_used=$(work_disk_used_percent)
+fi
 if [[ "${MANAGER_RECOVERY_MODE:-0}" == 1 ]]; then
-    log "Recovery cycle: preserving pipeline work/cache directories"
+    log "Recovery cycle: preserving canonical pipeline work/cache directories"
 elif [[ "$PIPELINE_MODE" == streaming_per_sample ]] && (( work_used >= FAILED_CACHE_CLEAN_TRIGGER_PERCENT )); then
     "${SCRIPT_DIR}/cleanup_old_failed_sample_workdirs.sh" "$cfg"
 elif (( work_used >= WORK_EMERGENCY_CLEAN_PERCENT )); then
@@ -39,6 +46,8 @@ else
 fi
 # Cleanup can release enough space to resume; never submit using a stale df value.
 work_used=$(work_disk_used_percent)
+# A second pass verifies holds, or releases only manager-owned holds if GC moved
+# usage through the configured hysteresis release threshold.
 WORK_DISK_USED_PERCENT_OVERRIDE="$work_used" "${SCRIPT_DIR}/control_streaming_array_admission.sh" "$cfg"
 determine_manager_phase
 if (( work_used >= WORK_CRITICAL_PERCENT )); then log "CRITICAL: work filesystem is ${work_used}% used; pipeline submissions forbidden"; fi

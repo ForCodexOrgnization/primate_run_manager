@@ -27,8 +27,12 @@ EOF2
 printf 'stream1\tm\t3\t700\tnow\tRUNNING\t0\t3\tRUNNING\tnow\tactive\t%s\t\tstream1\t\t0\tx\tx\tx\t\tx\tPER_SAMPLE\n' "$T/work" >> "$T/manager/state/wave_status.tsv"
 cat > "$T/mockbin/squeue" <<'MOCK'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TEST_ROOT/squeue.log"
 case "$(cat "$TEST_ROOT/queue_mode")" in
- pending) printf '700|1|RUNNING|None\n700|2|PENDING|Resources\n700|3|PENDING|Priority\n' ;;
+ pending)
+   if [[ -f "$TEST_ROOT/scontrol.log" && $(grep -c '^hold ' "$TEST_ROOT/scontrol.log") -ge 2 ]]; then
+     printf '700|2|PENDING|JobHeldUser\n700|3|PENDING|JobHeldUser\n'
+   else printf '700|2|PENDING|Resources\n700|3|PENDING|Priority\n'; fi ;;
  held) printf '700|2|PENDING|JobHeldUser\n700|3|PENDING|JobHeldUser\n' ;;
  empty) : ;;
 esac
@@ -47,6 +51,7 @@ assert test ! -s "$T/scontrol.log"
 WORK_DISK_USED_PERCENT_OVERRIDE=90 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert grep -qx 'hold 700_2' "$T/scontrol.log"
 assert grep -qx 'hold 700_3' "$T/scontrol.log"
+assert grep -q -- "--format=%F|%K|%T|%r" "$T/squeue.log"
 if grep -q '700_1' "$T/scontrol.log"; then exit 1; fi
 assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_disk_holds.tsv")" -eq 2
 # Repeated critical cycles are idempotent.
@@ -58,6 +63,7 @@ assert test "$(grep -c '^hold ' "$T/scontrol.log")" -eq 2
 printf empty > "$T/queue_mode"
 WORK_DISK_USED_PERCENT_OVERRIDE=80 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_disk_holds.tsv")" -eq 0
+: > "$T/scontrol.log"
 printf pending > "$T/queue_mode"
 WORK_DISK_USED_PERCENT_OVERRIDE=90 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 printf held > "$T/queue_mode"

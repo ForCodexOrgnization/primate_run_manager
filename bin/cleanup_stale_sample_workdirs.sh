@@ -26,27 +26,29 @@ stale_submission_safety() {
 used=$(used_now); (( used >= FAILED_CACHE_CLEAN_TRIGGER_PERCENT )) || { log "Stale cleanup not needed: usage ${used}%"; exit 0; }
 
 candidates=$(mktemp); trap 'rm -f "$candidates"' EXIT
-# GNU find's maxdepth/mindepth are the safety boundary. Print only directories;
-# malformed direct children are logged but are never deletion candidates.
-find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%T@\t%f\n' | sort -n > "$candidates"
+# GNU find's maxdepth/mindepth are the direct-child safety boundary. The name
+# filter avoids inspecting canonical workspaces; Bash still validates the full
+# stale-generation grammar before any candidate is trusted.
+find "$root" -mindepth 1 -maxdepth 1 -type d -name '*.stale.*' -printf '%T@\t%f\n' | sort -n > "$candidates"
 deleted=0
 while IFS=$'\t' read -r mtime base; do
     [[ -n "$base" ]] || continue
-    path="$root/$base"; decision=PROTECTED; reason=unsafe_path; sample=unknown
-    if [[ "$base" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*)\.stale\.([0-9]{8}T[0-9]{6}Z)\.([0-9]+)$ ]]; then
-        sample=${BASH_REMATCH[1]}; timestamp=${BASH_REMATCH[2]}; generation=${BASH_REMATCH[3]}
-        canonical="$root/$sample"; resolved=$(realpath -e "$path" 2>/dev/null || true)
-        if ! safe_sample_id "$sample" || [[ "$resolved" != "$path" || "$path" == "$canonical" ]]; then reason=unsafe_path
-        elif [[ -s "$MANAGER_ROOT/state/recovery_protected_stale_paths.tsv" ]] && awk -F '\t' -v p="$path" '$1==p{f=1}END{exit !f}' "$MANAGER_ROOT/state/recovery_protected_stale_paths.tsv"; then reason=active_recovery_protection
+    if [[ ! "$base" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*)\.stale\.([0-9]{8}T[0-9]{6}Z)\.([0-9]+)$ ]]; then
+        continue
+    fi
+    sample=${BASH_REMATCH[1]}; timestamp=${BASH_REMATCH[2]}; generation=${BASH_REMATCH[3]}
+    path="$root/$base"; decision=PROTECTED; reason=unsafe_path
+    canonical="$root/$sample"; resolved=$(realpath -e "$path" 2>/dev/null || true)
+    if ! safe_sample_id "$sample" || [[ "$resolved" != "$path" || "$path" == "$canonical" ]]; then reason=unsafe_path
+    elif [[ -s "$MANAGER_ROOT/state/recovery_protected_stale_paths.tsv" ]] && awk -F '\t' -v p="$path" '$1==p{f=1}END{exit !f}' "$MANAGER_ROOT/state/recovery_protected_stale_paths.tsv"; then reason=active_recovery_protection
+    else
+        ownership=$(stale_submission_safety "$path")
+        if [[ "$ownership" == active_slurm_ownership ]]; then reason=active_slurm_ownership
+        elif [[ "$ownership" == submission_state_unknown ]]; then reason=submission_state_unknown
         else
-            ownership=$(stale_submission_safety "$path")
-            if [[ "$ownership" == active_slurm_ownership ]]; then reason=active_slurm_ownership
-            elif [[ "$ownership" == submission_state_unknown ]]; then reason=submission_state_unknown
-            else
-                exec {lock_fd}>"$root/.locks/$sample.lock"
-                if ! flock -n "$lock_fd"; then reason=active_sample_lock
-                else decision=ELIGIBLE; reason=detached_stale_generation; fi
-            fi
+            exec {lock_fd}>"$root/.locks/$sample.lock"
+            if ! flock -n "$lock_fd"; then reason=active_sample_lock
+            else decision=ELIGIBLE; reason=detached_stale_generation; fi
         fi
     fi
     bytes=$(du -sb -- "$path" 2>/dev/null | awk '{print $1+0}'); age=$(( $(date +%s) - ${mtime%.*} ))

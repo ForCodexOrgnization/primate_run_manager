@@ -5,7 +5,7 @@ load_config "${1:-}"; ensure_state_files
 [[ "$ENABLE_LOCAL_CLEANUP" == 1 ]] || { log "ENABLE_LOCAL_CLEANUP=0; no local deletion"; exit 0; }
 mkdir -p "$ANALYSIS_ROOT"/{vcf,round2_coverage,numt_decoy_coverage,mtcn,receipts}
 cleanup_one() {
- local sample="$1" dir task cram vcf cov2 covn mtcn tbi="" dest local_file relative_path remote_parent remote_basename remote_path listing
+ local sample="$1" dir task cram vcf cov2 covn mtcn tbi="" dest local_file relative_path remote_parent remote_basename remote_path listing rc detail health err
  dir="$LOCAL_RESULTS/$sample"
  task=$(awk -F '\t' -v s="$sample" 'NR>1&&$1==s{print $9}' "$STATUS_FILE"); dest="${DEST_ROOT%/}/$sample/"
  [[ -d "$dir" ]] || return 0
@@ -26,11 +26,15 @@ cleanup_one() {
    remote_parent=$(dirname "$relative_path")
    remote_basename=$(basename "$relative_path")
    remote_path="${DEST_ROOT%/}/${sample}/${remote_parent}/"
-   listing=$(globus ls "${DEST_COLLECTION}:${remote_path}" 2>/dev/null) || {
+   err=$(mktemp); set +e; listing=$(globus ls "${DEST_COLLECTION}:${remote_path}" 2>"$err"); rc=$?; set -e
+   if (( rc != 0 )); then
+     detail=$(cat "$err"); rm -f "$err"; health=UNKNOWN; (( rc == 4 )) && health=AUTH_REQUIRED
+     record_globus_health "$health" destination_verify "$rc" "$detail"
      log "$sample destination directory not verified: $remote_path; refusing cleanup"
      log "$sample required filename: $remote_basename"
      return 1
-   }
+   fi
+   rm -f "$err"
    if ! printf '%s\n' "$listing" | awk -v f="$remote_basename" '
      {
        gsub(/\r/, "")

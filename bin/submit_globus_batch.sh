@@ -27,7 +27,18 @@ for s in "${samples[@]}"; do
 done
 cmd=(globus transfer "${SOURCE_COLLECTION}:${SOURCE_ROOT}" "${DEST_COLLECTION}:${DEST_ROOT}" --batch "$manifest" --sync-level "$GLOBUS_SYNC_LEVEL" --label "$batch_id" --format=UNIX --jmespath task_id)
 if [[ "$DRY_RUN" == 1 ]]; then printf 'DRY RUN: '; printf '%q ' "${cmd[@]}"; printf '\n'; exit 0; fi
-load_globus_module
-task_id=$("${cmd[@]}"); [[ -n "$task_id" ]] || die "Globus did not return task ID"
+module_err=$(mktemp); globus_err=$(mktemp); trap 'rm -f "$module_err" "$globus_err"' EXIT
+if ! (load_globus_module) 2>"$module_err"; then
+  detail=$(cat "$module_err"); record_globus_health UNKNOWN transfer_submit 127 "$detail"; log "Globus health UNKNOWN: $detail"; exit 1
+fi
+set +e; task_id=$("${cmd[@]}" 2>"$globus_err"); rc=$?; set -e
+if (( rc != 0 )) || [[ -z "$task_id" ]]; then
+  health=UNKNOWN; (( rc == 4 )) && health=AUTH_REQUIRED
+  detail=$(cat "$globus_err"); [[ -n "$task_id" ]] || detail="${detail}${detail:+; }no task ID returned"
+  record_globus_health "$health" transfer_submit "$rc" "$detail"
+  log "Globus transfer submission $health (rc=$rc): $detail"
+  exit 1
+fi
+record_globus_health HEALTHY transfer_submit 0 "submitted task $task_id"
 record_transfer() { local tmp="${TRANSFER_TASK_FILE}.tmp.$$"; cat "$TRANSFER_TASK_FILE" > "$tmp"; printf '%s\t%s\tACTIVE\t%s\t%s\t%s\tsubmitted\n' "$batch_id" "$task_id" "$sample_file" "$(now_iso)" "$(now_iso)" >> "$tmp"; mv "$tmp" "$TRANSFER_TASK_FILE"; for s in "${samples[@]}"; do update_sample_fields "$s" "status=TRANSFERRING" "globus_task_id=$task_id" "workspace_path=${DEST_ROOT%/}/$s/" "transfer_status=ACTIVE" "notes=full sample directory transfer submitted"; done; }
 with_state_lock record_transfer

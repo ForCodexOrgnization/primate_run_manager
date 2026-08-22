@@ -32,16 +32,28 @@ assert_ready() {
   assert awk -F '\t' -v s="$sample" '$1==s&&$4=="READY_TO_TRANSFER"&&$11=="READY"&&$14=="all required outputs validated"{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
 }
 
-# Every task-native/legacy active lifecycle state is eligible for formal validation.
+# Submitted/PENDING work is excluded; only executing lifecycle states validate.
 for spec in s1:PIPELINE_SUBMITTED s2:PIPELINE_RUNNING s3:PIPELINE_DEFERRED_RUNNING; do
   sample=${spec%%:*}; status=${spec#*:}
   set_status "$sample" "$status"
   make_valid_outputs "$sample"
 done
 "$REPO/bin/scan_active_results.sh" "$T/config.sh" >/dev/null
-assert_ready s1
+assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_SUBMITTED"{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
 assert_ready s2
 assert_ready s3
+
+# Both cached and freshly computed formal completion override stale deferred
+# failure lifecycle state.
+set_status s1 PIPELINE_DEFERRED_FAILED
+printf 'sample_id\ts1\ncompleted_at\tnow\n' > "$T/work/.sample_state/s1.complete.tsv"
+"$REPO/bin/scan_active_results.sh" "$T/config.sh" >/dev/null
+assert_ready s1
+set_status s2 PIPELINE_DEFERRED_FAILED
+awk -F '\t' 'NR==1||$1!="s2"' "$T/manager/state/output_validation.tsv" > "$T/validation"; mv "$T/validation" "$T/manager/state/output_validation.tsv"
+printf 'sample_id\ts2\ncompleted_at\tnow\n' > "$T/work/.sample_state/s2.complete.tsv"
+"$REPO/bin/scan_active_results.sh" "$T/config.sh" >/dev/null
+assert_ready s2
 
 # A completion marker only triggers the same validator; valid outputs remain required.
 set_status s1 PIPELINE_SUBMITTED
@@ -73,6 +85,17 @@ for status in TRANSFERRING TRANSFERRED_FULL LOCAL_FINAL_RETAINED PENDING; do
   set_status s3 "$status"
   awk -F '\t' '$1!="s3"' "$T/manager/state/output_validation.tsv" > "$T/validation"
   mv "$T/validation" "$T/manager/state/output_validation.tsv"
+  "$REPO/bin/scan_active_results.sh" "$T/config.sh" >/dev/null
+  assert awk -F '\t' -v s="$status" '$1=="s3"&&$4==s{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
+  assert awk -F '\t' '$1=="s3"{found=1}END{exit found}' "$T/manager/state/output_validation.tsv"
+done
+
+# Transfer-terminal and scope-terminal rows stay excluded even with a worker
+# completion marker.
+for status in TRANSFERRING TRANSFERRED_FULL LOCAL_FINAL_RETAINED OUT_OF_SCOPE; do
+  set_status s3 "$status"
+  printf 'sample_id\ts3\ncompleted_at\tnow\n' > "$T/work/.sample_state/s3.complete.tsv"
+  awk -F '\t' '$1!="s3"' "$T/manager/state/output_validation.tsv" > "$T/validation"; mv "$T/validation" "$T/manager/state/output_validation.tsv"
   "$REPO/bin/scan_active_results.sh" "$T/config.sh" >/dev/null
   assert awk -F '\t' -v s="$status" '$1=="s3"&&$4==s{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
   assert awk -F '\t' '$1=="s3"{found=1}END{exit found}' "$T/manager/state/output_validation.tsv"

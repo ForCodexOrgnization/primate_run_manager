@@ -35,6 +35,11 @@ if ! flock -n 8; then
     printf '[%s] Another manager daemon owns %s; exiting.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$MANAGER_ROOT/state/locks/manager_daemon.lock" >&2
     exit 0
 fi
+daemon_code_sha=$(sha256sum "$REPOSITORY_ROOT/run_manager_daemon.slurm" | awk '{print $1}')
+repository_sha=$(git -C "$REPOSITORY_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)
+printf 'slurm_job_id\tstarted_at\tdaemon_code_sha\trepository_sha\n%s\t%s\t%s\t%s\n' \
+  "${SLURM_JOB_ID:-interactive}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$daemon_code_sha" "$repository_sha" \
+  > "$MANAGER_ROOT/state/manager_daemon_status.tsv"
 
 stop_requested=0
 resubmit_requested=0
@@ -49,10 +54,10 @@ on_walltime() {
     resubmit_requested=1
     stop_requested=1
     [[ -z "$sleep_pid" ]] || kill "$sleep_pid" 2>/dev/null || true
-    printf '[%s] Wall-time warning received; finishing the active cycle before exit.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2
+    printf '[%s] Wall-time warning received; queueing successor before waiting for the active cycle.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2
+    submit_replacement
 }
 trap on_stop TERM INT
-trap on_walltime USR1
 
 submit_replacement() {
     (( resubmit_requested == 1 && replacement_submitted == 0 )) || return 0
@@ -69,6 +74,7 @@ submit_replacement() {
         printf '[%s] ERROR: Could not submit replacement daemon; resubmit manually.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2
     fi
 }
+trap on_walltime USR1
 
 # Normal cadence is split into cheap df-only waits.  No state scan or manager
 # reconciliation occurs unless the critical threshold is actually crossed.

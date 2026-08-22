@@ -16,7 +16,13 @@ work_used=$(work_disk_used_percent)
 eligible=PENDING; [[ "$phase" == DEFERRED_RETRY ]] && eligible=PIPELINE_DEFERRED_RETRY
 # Eligibility is both an explicit runnable status and current cohort membership.
 # This deliberately makes terminal OUT_OF_SCOPE rows impossible to submit.
-mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR==FNR{if(NF)a[$1]=1;next}NR>FNR&&FNR>1&&$4==s&&($1 in a){print $1}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+  # awk exits normally after consuming both inputs; unlike head this cannot
+  # SIGPIPE the producer under pipefail.
+  mapfile -t samples < <(awk -F '\t' -v s="$eligible" -v limit="$STREAMING_SUBMISSION_WINDOW" 'NR==FNR{if(NF)a[$1]=1;next}FNR>1&&$4==s&&($1 in a)&&n<limit{print $1;n++}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+else
+  mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR==FNR{if(NF)a[$1]=1;next}FNR>1&&$4==s&&($1 in a){print $1}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+fi
 ((${#samples[@]})) || { log "No eligible samples"; exit 0; }
 required=${#samples[@]}; [[ "$PIPELINE_MODE" == batch ]] && required=$(( (${#samples[@]} + PIPELINE_BATCH_SIZE - 1) / PIPELINE_BATCH_SIZE ))
 if command -v scontrol >/dev/null 2>&1; then
@@ -66,6 +72,6 @@ fi
 mv "$tmp" "$map"; chmod a-w "$map" 2>/dev/null || true
 # Keep the old streaming map readable for safe migration tooling.
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then awk -F '\t' 'BEGIN{OFS="\t";print "submission_id","array_job_id","array_task_id","sample_id","reference_name","sample_work_root","phase"} NR>1{print $1,$4,$5,$8,$9,$10,$3}' "$map" > "${MANAGER_ROOT}/state/array_sample_map/${submission_id}.tsv"; fi
-finalize(){ update_wave_row "$submission_id" "pipeline_job_id=$job_id" status=SUBMITTED slurm_state=PENDING; local s attempts old next; for s in "${samples[@]}"; do old=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $4}' "$STATUS_FILE"); attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); next=PIPELINE_SUBMITTED; [[ "$old" == PIPELINE_DEFERRED_RETRY ]] && next=PIPELINE_DEFERRED_RUNNING; update_sample_fields "$s" "status=$next" "slurm_job_id=$job_id" "wave_id=$submission_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=task-native submission; phase=$phase"; done; }
+finalize(){ update_wave_row "$submission_id" "pipeline_job_id=$job_id" status=SUBMITTED slurm_state=PENDING; local s attempts; for s in "${samples[@]}"; do attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=PIPELINE_SUBMITTED" "slurm_job_id=$job_id" "wave_id=$submission_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=task-native submission; phase=$phase"; done; }
 with_state_lock finalize
 log "Submitted $submission_id (${#samples[@]} samples, $required tasks) as Slurm array $job_id"

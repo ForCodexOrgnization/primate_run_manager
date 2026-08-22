@@ -381,3 +381,33 @@ successful samples, work directories, and `.sample_state` markers. It never
 submits work, transfers data, or performs cleanup. After checking the resulting
 state, restore `ENABLE_PIPELINE_SUBMIT=1` and use `manager_cycle.sh`; do not invoke
 the pipeline launcher directly.
+
+### Streaming lifecycle, bounded admission, and cache reclamation
+
+`PIPELINE_SUBMITTED` means that `sbatch` accepted an array element; it includes
+Slurm `PENDING` elements and does **not** imply execution. Exact accounting
+reconciliation changes normal elements to `PIPELINE_RUNNING`, or deferred-retry
+elements to `PIPELINE_DEFERRED_RUNNING`, only for `RUNNING`, `CONFIGURING`, or
+`COMPLETING`. Deferred identity is retained in the immutable submission task
+map (`phase=DEFERRED_RETRY`) while an element is pending.
+
+`STREAMING_SUBMISSION_WINDOW` (200 by default and on McCleary) caps the number
+of samples placed in one streaming submission. `SAMPLE_CHAIN_CONCURRENCY`
+remains the independent Slurm array execution throttle (10 on McCleary).
+Batch-mode submission is not windowed.
+
+At critical work-disk pressure the manager holds only exact pending array
+elements and records its ownership in `state/streaming_array_disk_holds.tsv`.
+It never suspends running work. Cleanup may discard a deferred element's cache
+while it remains `PENDING` only when the exact element is `JobHeldUser` and the
+ownership record, deferred phase, formal-validation result, and sample lock all
+agree before and after locking. Cleanup does not release the hold; its receipt
+records that the later retry must start fresh. Markerless terminal failures are
+similarly reclaimable only after exact terminal-state and ownership checks, and
+best-effort diagnostics are archived before deletion.
+
+The daemon's USR1 handler queues one idempotent successor with an
+`afterany:${SLURM_JOB_ID}` dependency immediately, before waiting for a slow
+active manager cycle to finish. The dependency prevents the successor from
+competing for the daemon lock while ensuring it already exists before the old
+allocation reaches walltime.

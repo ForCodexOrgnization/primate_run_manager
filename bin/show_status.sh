@@ -13,7 +13,14 @@ if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
  held=0; [[ ! -s "$hold_file" ]] || held=$(awk 'END{print (NR > 0 ? NR - 1 : 0)}' "$hold_file")
  printf 'Disk pressure array admission: %s\nArray elements held by manager: %s\nArray release threshold: %s%%\n' "$([[ "$held" -gt 0 ]] && echo HELD || echo ACTIVE)" "$held" "$WORK_ARRAY_RELEASE_PERCENT"
  if (( held > 0 )); then printf 'Array hold reason: %s\n' "$(awk -F '\t' 'NR==2{print $4;exit}' "$hold_file")"; fi
- printf 'Submitted sample tasks: %s\nRunning sample tasks: %s\n' "$(count_status PIPELINE_SUBMITTED)" "$(awk -F '\t' 'NR>1&&$4~/^(PIPELINE_RUNNING|PIPELINE_DEFERRED_RUNNING)$/{n++}END{print n+0}' "$STATUS_FILE")"
+ printf 'Manager lifecycle submitted: %s\nManager lifecycle executing: %s\n' "$(count_status PIPELINE_SUBMITTED)" "$(awk -F '\t' 'NR>1&&$4~/^(PIPELINE_RUNNING|PIPELINE_DEFERRED_RUNNING)$/{n++}END{print n+0}' "$STATUS_FILE")"
+ live_running=0; live_pending=0; live_held=0
+ if command -v squeue >/dev/null 2>&1; then
+   while IFS='|' read -r st reason; do
+     case "$st" in RUNNING|CONFIGURING|COMPLETING) live_running=$((live_running+1));; PENDING) live_pending=$((live_pending+1)); [[ "$reason" == JobHeldUser || "$reason" == JobHeldAdmin ]] && live_held=$((live_held+1));; esac
+   done < <(jobs=$(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/&&$4~/^[0-9]+$/{print $4}' "$WAVE_STATUS_FILE" | sort -u | paste -sd,); [[ -z "$jobs" ]] || squeue --noheader --array --jobs="$jobs" --format='%T|%r' 2>/dev/null)
+ fi
+ printf 'Actual live Slurm RUNNING: %s\nActual live Slurm PENDING: %s\nActual live Slurm HELD: %s\n' "$live_running" "$live_pending" "$live_held"
 else
  printf 'Batch size: %s\nBatch concurrency: %s\n' "$PIPELINE_BATCH_SIZE" "$CHAIN_CONCURRENT_BATCHES"
  if [[ -n "$active" && -s "${MANAGER_ROOT}/state/submission_task_map/${active}.tsv" ]]; then printf 'Total batches in active submission: %s\n' "$(awk -F '\t' 'NR>1&&!seen[$5]++{n++}END{print n+0}' "${MANAGER_ROOT}/state/submission_task_map/${active}.tsv")"; fi

@@ -48,7 +48,8 @@ determine_manager_phase
 
 # The scheduler must now select deferred rows rather than searching PENDING.
 "$REPO/bin/submit_next_batch.sh" "$T/config.sh" >/dev/null
-[[ $(awk -F '\t' 'NR>1&&$4=="PIPELINE_DEFERRED_RUNNING"{n++}END{print n+0}' "$T/manager/state/sample_status.tsv") -eq 2 ]]
+[[ $(awk -F '\t' 'NR>1&&$4=="PIPELINE_SUBMITTED"{n++}END{print n+0}' "$T/manager/state/sample_status.tsv") -eq 2 ]]
+assert awk -F '\t' 'NR>1&&$4=="PIPELINE_DEFERRED_RUNNING"{found=1}END{exit found}' "$T/manager/state/sample_status.tsv"
 
 # A genuinely new submission remains active while Slurm accounting catches up.
 sed -i 's/\tCOMPLETE\t/\tSUBMITTED\t/' "$T/manager/state/wave_status.tsv"

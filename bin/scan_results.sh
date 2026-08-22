@@ -30,9 +30,10 @@ file_signature() {
 }
 
 if [[ "$SCAN_RESULTS_SCOPE" == active ]]; then
- active_status_regex='^(WAVE_SUBMITTED|PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING)$'
- [[ "${FORCE_SCAN_INCOMPLETE_REVIEW:-0}" == 1 ]] && active_status_regex='^(WAVE_SUBMITTED|PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING|PIPELINE_INCOMPLETE_REVIEW)$'
- total=$(awk -F '\t' -v r="$active_status_regex" 'NR>1&&$4~r{n++}END{print n+0}' "$STATUS_FILE")
+ active_status_regex='^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING)$'
+ [[ "${FORCE_SCAN_INCOMPLETE_REVIEW:-0}" == 1 ]] && active_status_regex='^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING|PIPELINE_INCOMPLETE_REVIEW)$'
+ if [[ -n "${SCAN_SAMPLE_LIST:-}" ]]; then total=$(awk 'NF{n++}END{print n+0}' "$SCAN_SAMPLE_LIST")
+ else total=$(awk -F '\t' -v r="$active_status_regex" -v markers="${PIPELINE_WORK_ROOT}/.sample_state" 'NR>1&&($4~r||system("test -s \"" markers "/" $1 ".complete.tsv\"")==0){n++}END{print n+0}' "$STATUS_FILE"); fi
  (( total > 0 )) || { log "No active pipeline samples to validate"; exit 0; }
 else
  total=$(awk -F '\t' 'NR>1 && $4!~/^(TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED)$/{n++} END{print n+0}' "$STATUS_FILE")
@@ -41,7 +42,8 @@ current=0
 while IFS=$'\t' read -r sample species hpc status job wave attempts error task workspace transfer cleanup updated oldnotes; do
  [[ "$sample" == sample_id ]] && continue
  if [[ "$SCAN_RESULTS_SCOPE" == active ]]; then
-   [[ "$status" =~ $active_status_regex ]] || continue
+   if [[ -n "${SCAN_SAMPLE_LIST:-}" ]]; then grep -Fqx -- "$sample" "$SCAN_SAMPLE_LIST" || continue
+   else [[ "$status" =~ $active_status_regex || -s "${PIPELINE_WORK_ROOT}/.sample_state/${sample}.complete.tsv" ]] || continue; fi
  else
    case "$status" in TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED) continue;; esac
  fi

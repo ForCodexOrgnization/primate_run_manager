@@ -49,10 +49,10 @@ on_walltime() {
     resubmit_requested=1
     stop_requested=1
     [[ -z "$sleep_pid" ]] || kill "$sleep_pid" 2>/dev/null || true
-    printf '[%s] Wall-time warning received; finishing the active cycle before exit.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2
+    printf '[%s] Wall-time warning received; queueing successor before waiting for the active cycle.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2
+    submit_replacement
 }
 trap on_stop TERM INT
-trap on_walltime USR1
 
 submit_replacement() {
     (( resubmit_requested == 1 && replacement_submitted == 0 )) || return 0
@@ -69,6 +69,7 @@ submit_replacement() {
         printf '[%s] ERROR: Could not submit replacement daemon; resubmit manually.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2
     fi
 }
+trap on_walltime USR1
 
 # Normal cadence is split into cheap df-only waits.  No state scan or manager
 # reconciliation occurs unless the critical threshold is actually crossed.

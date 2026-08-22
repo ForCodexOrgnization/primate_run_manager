@@ -12,13 +12,14 @@ load_config "$cfg"; ensure_state_files; validate_config
 # In streaming mode this updates submission audit metadata only; it never gates
 # per-sample reconciliation or transfer readiness.
 "${SCRIPT_DIR}/update_wave_states.sh" "$cfg"
+# Reconcile exact task state first, so submitted/PENDING elements cannot enter
+# the incremental validator. Completion-marker validation remains targeted.
+INGEST_SKIP_VALIDATION=1 "${SCRIPT_DIR}/ingest_sample_markers.sh" "$cfg"
 if [[ "$ENABLE_FULL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
     "${SCRIPT_DIR}/scan_results.sh" "$cfg"
 elif [[ "$ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
     "${SCRIPT_DIR}/scan_active_results.sh" "$cfg"
 fi
-# Exact array elements are reconciled before transfer and new submission work.
-"${SCRIPT_DIR}/ingest_sample_markers.sh" "$cfg"
 "${SCRIPT_DIR}/ingest_batch_tasks.sh" "$cfg"
 "${SCRIPT_DIR}/archive_wave_failure_diagnostics.sh" "$cfg"
 "${SCRIPT_DIR}/archive_sample_failure_diagnostics.sh" "$cfg"

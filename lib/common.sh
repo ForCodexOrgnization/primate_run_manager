@@ -48,7 +48,7 @@ load_config() {
     : "${DISK_PRESSURE_POLL_SECONDS:=60}"
     : "${ENABLE_ORPHAN_WORK_CLEANUP:=1}" "${ORPHAN_WORK_RETENTION_HOURS:=48}"
     : "${MAX_DIAGNOSTIC_LOG_LINES:=5000}" "${MAX_DIAGNOSTIC_FILE_BYTES:=10485760}"
-    : "${PIPELINE_MODE:=batch}" "${SAMPLE_CHAIN_CONCURRENCY:=10}"
+    : "${PIPELINE_MODE:=batch}" "${SAMPLE_CHAIN_CONCURRENCY:=10}" "${STREAMING_SUBMISSION_WINDOW:=200}"
     : "${IMMEDIATE_SAMPLE_RETRIES:=1}" "${IMMEDIATE_RETRY_DELAY_SECONDS:=60}"
     : "${CLEAN_VALIDATED_STAGE_WORK:=1}" "${REMOVE_SAMPLE_ROOT_ON_SUCCESS:=1}"
     : "${FAILED_CACHE_CLEAN_TRIGGER_PERCENT:=70}" "${FAILED_CACHE_CLEAN_TARGET_PERCENT:=65}"
@@ -117,7 +117,7 @@ validate_config() {
         [[ -s "$BATCH_PIPELINE_LAUNCHER" ]] || die "batch launcher missing: $BATCH_PIPELINE_LAUNCHER"
     fi
     [[ -x "$PIPELINE_LAUNCHER" ]] || die "PIPELINE_LAUNCHER missing or not executable: $PIPELINE_LAUNCHER"
-    for v in PIPELINE_WAVE_SIZE SAMPLE_CHAIN_CONCURRENCY IMMEDIATE_SAMPLE_RETRIES IMMEDIATE_RETRY_DELAY_SECONDS CLEAN_VALIDATED_STAGE_WORK REMOVE_SAMPLE_ROOT_ON_SUCCESS STREAM_SMOKE_TEST FAILED_CACHE_CLEAN_TRIGGER_PERCENT FAILED_CACHE_CLEAN_TARGET_PERCENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
+    for v in PIPELINE_WAVE_SIZE SAMPLE_CHAIN_CONCURRENCY STREAMING_SUBMISSION_WINDOW IMMEDIATE_SAMPLE_RETRIES IMMEDIATE_RETRY_DELAY_SECONDS CLEAN_VALIDATED_STAGE_WORK REMOVE_SAMPLE_ROOT_ON_SUCCESS STREAM_SMOKE_TEST FAILED_CACHE_CLEAN_TRIGGER_PERCENT FAILED_CACHE_CLEAN_TARGET_PERCENT MAX_ACTIVE_PIPELINE_WAVES MAX_PIPELINE_RETRIES AUTO_RETRY_IMPORTED_INCOMPLETE TRANSFER_BATCH_SIZE MAX_ACTIVE_TRANSFER_TASKS STOP_SUBMIT_PERCENT FORCE_TRANSFER_PERCENT EMERGENCY_PERCENT MAX_LOCAL_SAMPLE_DIRS CLEAN_ON_SUCCESS ENABLE_PIPELINE_SUBMIT ENABLE_TRANSFER ENABLE_LOCAL_CLEANUP DRY_RUN PATH_CHECK_REQUIRED PATH_CHECK_INCLUDE_CRAM PATH_CHECK_MAX_FILES; do
         [[ "${!v:-}" =~ ^[0-9]+$ ]] || die "$v must be an integer"
     done
     if [[ "$PIPELINE_MODE" == batch ]]; then
@@ -230,6 +230,7 @@ update_wave_row() {
 }
 slurm_normalize_state() { local s="${1%% *}"; s="${s%+}"; printf '%s\n' "$s"; }
 slurm_state_is_active() { case "$(slurm_normalize_state "$1")" in PENDING|RUNNING|CONFIGURING|COMPLETING|REQUEUED|RESIZING|SUSPENDED) return 0;; *) return 1;; esac; }
+slurm_state_is_executing() { case "$(slurm_normalize_state "$1")" in RUNNING|CONFIGURING|COMPLETING) return 0;; *) return 1;; esac; }
 slurm_state_is_terminal() { case "$(slurm_normalize_state "$1")" in COMPLETED|FAILED|CANCELLED|TIMEOUT|PREEMPTED|NODE_FAIL|OUT_OF_MEMORY|BOOT_FAIL|DEADLINE|REVOKED|SPECIAL_EXIT) return 0;; *) return 1;; esac; }
 
 # Query the live queue once, without asking Slurm to resolve a possibly expired
@@ -319,7 +320,24 @@ disk_used_percent() { df -P "$DISK_CHECK_PATH" | awk 'NR==2{gsub(/%/,"",$5);prin
 work_disk_used_percent() { df -P "$WORK_DISK_CHECK_PATH" | awk 'NR==2{gsub(/%/,"",$5);print $5}'; }
 safe_sample_id() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [[ "$1" != . && "$1" != .. && "$1" != .sample_state && "$1" != .locks && "$1" != .manifests ]]; }
 sample_work_root() { safe_sample_id "$1" || die "unsafe sample ID: $1"; printf '%s/%s\n' "${PIPELINE_WORK_ROOT%/}" "$1"; }
-marker_field() { local file="$1" field="$2"; awk -F '\t' -v f="$field" 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next} NR==2{if(h[f])print $h[f];exit}' "$file"; }
+marker_field() {
+    local file="$1" field="$2"
+    # Workers write vertical key/value TSVs.  Older workers wrote a header and
+    # one data row, so recognize the shape before selecting the parser.
+    awk -F '\t' -v f="$field" '
+      NR==1 { nf1=NF; for(i=1;i<=NF;i++){head[i]=$i; h[$i]=i}; next }
+      NR==2 {
+        # A second recognized key identifies the vertical representation;
+        # otherwise this is the legacy data row (including two-column files).
+        vertical=($1 ~ /^(sample_id|worker_state|reference_name|failed_stage|failure_class|failure_reason|immediate_worker_attempt|first_failure_epoch|last_failure_epoch|fingerprint|completed_at)$/)
+        if (!vertical) { if(h[f]) print $h[f]; exit }
+        if(head[1]==f) {print head[2]; exit}
+        if($1==f) {print $2; exit}
+        next
+      }
+      { if(vertical && $1==f){print $2; exit} }
+    ' "$file"
+}
 sample_array_state() {
     local sample="$1" map job task
     map=$(awk -F '\t' -v s="$sample" 'NR>1&&$6=="SAMPLE"&&$8==s{line=$0}END{print line}' "${MANAGER_ROOT}/state/submission_task_map/"*.tsv 2>/dev/null || true)

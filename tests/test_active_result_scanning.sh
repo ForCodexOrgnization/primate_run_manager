@@ -32,14 +32,14 @@ assert_ready() {
   assert awk -F '\t' -v s="$sample" '$1==s&&$4=="READY_TO_TRANSFER"&&$11=="READY"&&$14=="all required outputs validated"{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
 }
 
-# Every task-native/legacy active lifecycle state is eligible for formal validation.
+# Submitted/PENDING work is excluded; only executing lifecycle states validate.
 for spec in s1:PIPELINE_SUBMITTED s2:PIPELINE_RUNNING s3:PIPELINE_DEFERRED_RUNNING; do
   sample=${spec%%:*}; status=${spec#*:}
   set_status "$sample" "$status"
   make_valid_outputs "$sample"
 done
 "$REPO/bin/scan_active_results.sh" "$T/config.sh" >/dev/null
-assert_ready s1
+assert awk -F '\t' '$1=="s1"&&$4=="PIPELINE_SUBMITTED"{ok=1}END{exit !ok}' "$T/manager/state/sample_status.tsv"
 assert_ready s2
 assert_ready s3
 

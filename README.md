@@ -411,3 +411,18 @@ The daemon's USR1 handler queues one idempotent successor with an
 active manager cycle to finish. The dependency prevents the successor from
 competing for the daemon lock while ensuring it already exists before the old
 allocation reaches walltime.
+
+### Globus failure isolation and transfer health
+
+Globus operations are best effort within a manager cycle. CLI exit code 4 is
+recorded as `AUTH_REQUIRED` in `state/globus_health.tsv`; other query or
+submission failures are recorded as `UNKNOWN`, including captured stderr and
+the failing operation. The daemon does not attempt noninteractive Yale login or
+reauthorization. An unqueryable transfer remains `ACTIVE` until Globus provides
+authoritative terminal status, and transfer failures do not prevent pipeline
+reconciliation, disk admission, cleanup, or submission work.
+
+Each cycle checks and submits already-`READY_TO_TRANSFER` samples before output
+validation, then repeats transfer handling afterward for samples newly proven
+complete. `show_status.sh` reports Globus health, active transfer count, daemon
+and repository code identifiers, and the last manager-cycle result.

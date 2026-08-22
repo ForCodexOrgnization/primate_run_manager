@@ -35,6 +35,11 @@ if ! flock -n 8; then
     printf '[%s] Another manager daemon owns %s; exiting.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$MANAGER_ROOT/state/locks/manager_daemon.lock" >&2
     exit 0
 fi
+daemon_code_sha=$(sha256sum "$REPOSITORY_ROOT/run_manager_daemon.slurm" | awk '{print $1}')
+repository_sha=$(git -C "$REPOSITORY_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)
+printf 'slurm_job_id\tstarted_at\tdaemon_code_sha\trepository_sha\n%s\t%s\t%s\t%s\n' \
+  "${SLURM_JOB_ID:-interactive}" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$daemon_code_sha" "$repository_sha" \
+  > "$MANAGER_ROOT/state/manager_daemon_status.tsv"
 
 stop_requested=0
 resubmit_requested=0

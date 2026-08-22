@@ -28,12 +28,19 @@ file_signature() {
         printf '%s\t%s' -1 -1
     fi
 }
+promote_validated_sample() {
+ local sample="$1" status="$2"
+ case "$status" in
+   PENDING|WAVE_SUBMITTED|PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_INCOMPLETE_REVIEW|PIPELINE_RETRY_READY|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RETRY|PIPELINE_DEFERRED_RUNNING|PIPELINE_DEFERRED_FAILED|PIPELINE_FAILED|TRANSFER_FAILED)
+     with_state_lock update_sample_fields "$sample" "status=READY_TO_TRANSFER" "last_pipeline_error=" "transfer_status=READY" "notes=all required outputs validated";;
+ esac
+}
 
 if [[ "$SCAN_RESULTS_SCOPE" == active ]]; then
  active_status_regex='^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING)$'
  [[ "${FORCE_SCAN_INCOMPLETE_REVIEW:-0}" == 1 ]] && active_status_regex='^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING|PIPELINE_INCOMPLETE_REVIEW)$'
  if [[ -n "${SCAN_SAMPLE_LIST:-}" ]]; then total=$(awk 'NF{n++}END{print n+0}' "$SCAN_SAMPLE_LIST")
- else total=$(awk -F '\t' -v r="$active_status_regex" -v markers="${PIPELINE_WORK_ROOT}/.sample_state" 'NR>1&&($4~r||system("test -s \"" markers "/" $1 ".complete.tsv\"")==0){n++}END{print n+0}' "$STATUS_FILE"); fi
+ else total=$(awk -F '\t' -v r="$active_status_regex" -v markers="${PIPELINE_WORK_ROOT}/.sample_state" 'NR>1&&$4!~/^(TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED|OUT_OF_SCOPE)$/&&($4~r||system("test -s \"" markers "/" $1 ".complete.tsv\"")==0){n++}END{print n+0}' "$STATUS_FILE"); fi
  (( total > 0 )) || { log "No active pipeline samples to validate"; exit 0; }
 else
  total=$(awk -F '\t' 'NR>1 && $4!~/^(TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED)$/{n++} END{print n+0}' "$STATUS_FILE")
@@ -42,6 +49,7 @@ current=0
 while IFS=$'\t' read -r sample species hpc status job wave attempts error task workspace transfer cleanup updated oldnotes; do
  [[ "$sample" == sample_id ]] && continue
  if [[ "$SCAN_RESULTS_SCOPE" == active ]]; then
+   [[ "$status" =~ ^(TRANSFERRING|TRANSFERRED_FULL|LOCAL_FINAL_RETAINED|OUT_OF_SCOPE)$ ]] && continue
    if [[ -n "${SCAN_SAMPLE_LIST:-}" ]]; then grep -Fqx -- "$sample" "$SCAN_SAMPLE_LIST" || continue
    else [[ "$status" =~ $active_status_regex || -s "${PIPELINE_WORK_ROOT}/.sample_state/${sample}.complete.tsv" ]] || continue; fi
  else
@@ -55,6 +63,7 @@ while IFS=$'\t' read -r sample species hpc status job wave attempts error task w
  if [[ -n "$cached" && "$cached" == "$signature" ]]; then
    log "Using unchanged successful validation for $sample"
    log "COMPLETE"
+   promote_validated_sample "$sample" "$status"
    continue
  fi
  cram_ok=0; crai_ok=0; vcf_ok=0; cov2_ok=0; covn_ok=0; mtcn_ok=0; notes=()
@@ -87,7 +96,7 @@ while IFS=$'\t' read -r sample species hpc status job wave attempts error task w
  note=$(IFS=';'; echo "${notes[*]:-validated}"); row="$sample\t$cram_ok\t$crai_ok\t$vcf_ok\t$cov2_ok\t$covn_ok\t$mtcn_ok\t$overall\t$(now_iso)\t$note\t$signature"; with_state_lock upsert_validation "$row"
  if ((overall)); then
    log "COMPLETE"
-   case "$status" in PENDING|WAVE_SUBMITTED|PIPELINE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_COMPLETE|PIPELINE_INCOMPLETE_REVIEW|PIPELINE_RETRY_READY|PIPELINE_RETRY_RUNNING|PIPELINE_DEFERRED_RUNNING|PIPELINE_FAILED|TRANSFER_FAILED) with_state_lock update_sample_fields "$sample" "status=READY_TO_TRANSFER" "transfer_status=READY" "notes=all required outputs validated";; esac
+   promote_validated_sample "$sample" "$status"
  else
    log "INCOMPLETE: $note"
    if [[ "$status" =~ ^(WAVE_SUBMITTED|PIPELINE_RUNNING|PIPELINE_RETRY_RUNNING)$ ]] && ! wave_is_active "$wave"; then with_state_lock update_sample_fields "$sample" "notes=$note"

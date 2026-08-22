@@ -9,12 +9,34 @@ if [[ "${MANAGER_CYCLE_LOCK_HELD:-0}" != 1 ]]; then
   exec 8>"$MANAGER_ROOT/state/locks/manager_cycle.lock"; flock -n 8 || { log "Another manager cycle is active"; exit 0; }
 fi
 load_config "$cfg"; ensure_state_files; validate_config
+cycle_started=$(now_iso); cycle_sha=$(git_commit_or_unknown)
+record_cycle_status() {
+  local rc=$? status=SUCCESS tmp="${MANAGER_CYCLE_STATUS_FILE}.tmp.$$"
+  (( rc == 0 )) || status=FAILED
+  printf 'status\texit_code\tstarted_at\tfinished_at\tcode_sha\n%s\t%s\t%s\t%s\t%s\n' "$status" "$rc" "$cycle_started" "$(now_iso)" "$cycle_sha" > "$tmp"
+  mv "$tmp" "$MANAGER_CYCLE_STATUS_FILE"
+}
+trap record_cycle_status EXIT
+run_transfer_step() {
+  local helper="$1" rc=0
+  "$helper" "$cfg" || rc=$?
+  if (( rc != 0 )); then
+    [[ -s "$GLOBUS_HEALTH_FILE" ]] || record_globus_health UNKNOWN "${helper##*/}" "$rc" "transfer helper failed"
+    log "WARNING: transfer helper ${helper##*/} failed (rc=$rc); continuing manager cycle"
+  fi
+  return 0
+}
 # In streaming mode this updates submission audit metadata only; it never gates
 # per-sample reconciliation or transfer readiness.
 "${SCRIPT_DIR}/update_wave_states.sh" "$cfg"
 # Reconcile exact task state first, so submitted/PENDING elements cannot enter
 # the incremental validator. Completion-marker validation remains targeted.
 INGEST_SKIP_VALIDATION=1 "${SCRIPT_DIR}/ingest_sample_markers.sh" "$cfg"
+# Cheap transfer progress/submission runs before validation so already-READY
+# samples are not delayed behind a slow output scan.
+run_transfer_step "${SCRIPT_DIR}/check_globus_tasks.sh"
+run_transfer_step "${SCRIPT_DIR}/cleanup_transferred_samples.sh"
+run_transfer_step "${SCRIPT_DIR}/submit_globus_batch.sh"
 if [[ "$ENABLE_FULL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
     "${SCRIPT_DIR}/scan_results.sh" "$cfg"
 elif [[ "$ENABLE_INCREMENTAL_SCAN_IN_MANAGER_CYCLE" == 1 ]]; then
@@ -52,9 +74,10 @@ work_used=$(work_disk_used_percent)
 WORK_DISK_USED_PERCENT_OVERRIDE="$work_used" "${SCRIPT_DIR}/control_streaming_array_admission.sh" "$cfg"
 determine_manager_phase
 if (( work_used >= WORK_CRITICAL_PERCENT )); then log "CRITICAL: work filesystem is ${work_used}% used; pipeline submissions forbidden"; fi
-"${SCRIPT_DIR}/check_globus_tasks.sh" "$cfg"
-"${SCRIPT_DIR}/cleanup_transferred_samples.sh" "$cfg"
-"${SCRIPT_DIR}/submit_globus_batch.sh" "$cfg"
+# A second best-effort pass picks up READY samples produced by validation.
+run_transfer_step "${SCRIPT_DIR}/check_globus_tasks.sh"
+run_transfer_step "${SCRIPT_DIR}/cleanup_transferred_samples.sh"
+run_transfer_step "${SCRIPT_DIR}/submit_globus_batch.sh"
 [[ "$(manager_phase)" != PAUSED_DISK_PRESSURE && "$work_used" -lt "$WORK_CRITICAL_PERCENT" ]] && "${SCRIPT_DIR}/submit_next_batch.sh" "$cfg"
 # Status rendering is informational.  Reconciliation and submission failures above
 # remain fatal, but a display-only problem must not make restart leave no daemon.

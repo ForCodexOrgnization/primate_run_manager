@@ -77,10 +77,20 @@ load_config() {
     VALIDATION_FILE="${MANAGER_ROOT}/state/output_validation.tsv"
     MANAGER_PHASE_FILE="${MANAGER_ROOT}/state/manager_phase.tsv"
     WAVE_FAILURE_FILE="${MANAGER_ROOT}/state/wave_failures.tsv"
+    GLOBUS_HEALTH_FILE="${MANAGER_ROOT}/state/globus_health.tsv"
+    MANAGER_CYCLE_STATUS_FILE="${MANAGER_ROOT}/state/manager_cycle_status.tsv"
     MANAGER_RUNTIME_ROOT="${MANAGER_RUNTIME_ROOT:-${RUNTIME_ROOT:-$MANAGER_ROOT}}"
     RUNTIME_LOG_DIR="${RUNTIME_LOG_DIR:-${MANAGER_RUNTIME_ROOT}/logs}"
     mkdir -p "${MANAGER_ROOT}"/{state/locks,state/array_sample_map,state/submission_task_map,state/receipts/deferred_wave_work_cleanup,state/receipts/failed_sample_work_cleanup,state/receipts/stale_sample_work_cleanup,state/receipts/sample_scope_reconciliation,state/failure_diagnostics/samples,manifests/pipeline_waves,manifests/submissions,manifests/transfer_batches,logs,samples} "$RUNTIME_LOG_DIR"
     [[ "$PIPELINE_MODE" != streaming_per_sample ]] || mkdir -p "$PIPELINE_WORK_ROOT"/{.sample_state,.locks,.manifests}
+}
+
+record_globus_health() {
+    local health="$1" operation="$2" rc="${3:-0}" detail="${4:-}" tmp="${GLOBUS_HEALTH_FILE}.tmp.$$"
+    detail=${detail//$'\n'/; }; detail=${detail//$'\t'/ }
+    printf 'health\toperation\texit_code\tchecked_at\tdetail\n%s\t%s\t%s\t%s\t%s\n' \
+      "$health" "$operation" "$rc" "$(now_iso)" "$detail" > "$tmp"
+    mv "$tmp" "$GLOBUS_HEALTH_FILE"
 }
 
 validate_config() {

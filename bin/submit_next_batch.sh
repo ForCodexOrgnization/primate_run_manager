@@ -3,10 +3,11 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/common.sh"
-load_config "${1:-}"; validate_config; ensure_state_files
+cfg="${1:-${RUN_MANAGER_CONFIG:-}}"
+load_config "$cfg"; validate_config; ensure_state_files
 [[ "$ENABLE_PIPELINE_SUBMIT" == 1 ]] || { log "ENABLE_PIPELINE_SUBMIT=0"; exit 0; }
-# A single live submission owns the selected mode's global Slurm throttle.
-(( $(active_submission_count) == 0 )) || { log "An active submission already owns the global concurrency budget"; exit 0; }
+# Batch mode retains single-wave ownership. Streaming overlap is governed by exact-element admission.
+[[ "$PIPELINE_MODE" == streaming_per_sample ]] || (( $(active_submission_count) == 0 )) || { log "An active submission already owns the global concurrency budget"; exit 0; }
 determine_manager_phase; phase=$(manager_phase)
 [[ "$phase" != PAUSED_DISK_PRESSURE ]] || { log "Pipeline submission paused by work filesystem pressure"; exit 0; }
 work_used=$(work_disk_used_percent)
@@ -19,7 +20,14 @@ eligible=PENDING; [[ "$phase" == DEFERRED_RETRY ]] && eligible=PIPELINE_DEFERRED
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
   # awk exits normally after consuming both inputs; unlike head this cannot
   # SIGPIPE the producer under pipefail.
-  mapfile -t samples < <(awk -F '\t' -v s="$eligible" -v limit="$STREAMING_SUBMISSION_WINDOW" 'NR==FNR{if(NF)a[$1]=1;next}FNR>1&&$4==s&&($1 in a)&&n<limit{print $1;n++}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+  mapfile -t samples < <(awk -F '\t' -v s="$eligible" -v limit="$STREAMING_SUBMISSION_WINDOW" 'NR==FNR{if(NF)a[$1]=1;next}FNR>1&&$4==s&&($1 in a)&&(limit==0||n<limit){print $1;n++}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
+  # Exact task maps are authoritative; never duplicate ownership across active submissions.
+  if ((${#samples[@]})); then
+    declare -A owned=()
+    active_jobs=$(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/&&$4~/^[0-9]+$/{print $4}' "$WAVE_STATUS_FILE" | sort -u | paste -sd,)
+    while IFS= read -r x; do [[ -n "$x" ]] && owned["$x"]=1; done < <(awk -F '\t' -v jobs=",$active_jobs," 'NR>1&&$6=="SAMPLE"&&index(jobs,","$4","){print $8}' "${MANAGER_ROOT}"/state/submission_task_map/*.tsv 2>/dev/null || true)
+    filtered=(); for sample in "${samples[@]}"; do [[ -n "${owned[$sample]:-}" ]] || filtered+=("$sample"); done; samples=("${filtered[@]}")
+  fi
 else
   mapfile -t samples < <(awk -F '\t' -v s="$eligible" 'NR==FNR{if(NF)a[$1]=1;next}FNR>1&&$4==s&&($1 in a){print $1}' "$ASSIGNED_SAMPLE_LIST" "$STATUS_FILE")
 fi
@@ -48,7 +56,7 @@ common=("FULL_SAMPLE_LIST=$manifest" "PRE_OUTPUT_DIR=$LOCAL_RESULTS" "ROUND_OUTP
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
  repo=$(realpath -m "$PIPELINE_REPO")
  log "INFO: pipeline_repo_dir=$repo"
- command=(env "${common[@]}" "MAX_CONCURRENT=$SAMPLE_CHAIN_CONCURRENCY" "PIPELINE_REPO_DIR=$repo" "STREAM_SMOKE_TEST=$STREAM_SMOKE_TEST" "IMMEDIATE_SAMPLE_RETRIES=$IMMEDIATE_SAMPLE_RETRIES" "IMMEDIATE_RETRY_DELAY_SECONDS=$IMMEDIATE_RETRY_DELAY_SECONDS" "CLEAN_VALIDATED_STAGE_WORK=$CLEAN_VALIDATED_STAGE_WORK" "REMOVE_SAMPLE_ROOT_ON_SUCCESS=$REMOVE_SAMPLE_ROOT_ON_SUCCESS" "SAMTOOLS_MODULE=${SAMTOOLS_MODULE:-}" "STREAM_PARTITION=$STREAM_PARTITION" "GLOBAL_REF_DIR=${GLOBAL_REF_DIR:-}" "REF_DIR=${REF_DIR:-}" "NUCLEAR_ONLY_REF_DIR=${NUCLEAR_ONLY_REF_DIR:-}" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" bash "$PIPELINE_LAUNCHER")
+ command=(env "${common[@]}" "MAX_CONCURRENT=$SAMPLE_CHAIN_CONCURRENCY" "STREAMING_SUBMIT_HELD=1" "PIPELINE_REPO_DIR=$repo" "STREAM_SMOKE_TEST=$STREAM_SMOKE_TEST" "IMMEDIATE_SAMPLE_RETRIES=$IMMEDIATE_SAMPLE_RETRIES" "IMMEDIATE_RETRY_DELAY_SECONDS=$IMMEDIATE_RETRY_DELAY_SECONDS" "CLEAN_VALIDATED_STAGE_WORK=$CLEAN_VALIDATED_STAGE_WORK" "REMOVE_SAMPLE_ROOT_ON_SUCCESS=$REMOVE_SAMPLE_ROOT_ON_SUCCESS" "SAMTOOLS_MODULE=${SAMTOOLS_MODULE:-}" "STREAM_PARTITION=$STREAM_PARTITION" "GLOBAL_REF_DIR=${GLOBAL_REF_DIR:-}" "REF_DIR=${REF_DIR:-}" "NUCLEAR_ONLY_REF_DIR=${NUCLEAR_ONLY_REF_DIR:-}" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" bash "$PIPELINE_LAUNCHER")
 else
  command=(env "${common[@]}" "BATCH_LIST_DIR=$batch_lists" "BATCH_SIZE=$PIPELINE_BATCH_SIZE" "CHAIN_CONCURRENT_BATCHES=$CHAIN_CONCURRENT_BATCHES" "NUMT_CONCURRENT=$NUMT_CONCURRENT" "CLEAN_ON_SUCCESS=$CLEAN_ON_SUCCESS" "ENABLE_CHUNKED_ALIGNMENT=$ENABLE_CHUNKED_ALIGNMENT" bash "$PIPELINE_LAUNCHER")
 fi
@@ -74,4 +82,5 @@ mv "$tmp" "$map"; chmod a-w "$map" 2>/dev/null || true
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then awk -F '\t' 'BEGIN{OFS="\t";print "submission_id","array_job_id","array_task_id","sample_id","reference_name","sample_work_root","phase"} NR>1{print $1,$4,$5,$8,$9,$10,$3}' "$map" > "${MANAGER_ROOT}/state/array_sample_map/${submission_id}.tsv"; fi
 finalize(){ update_wave_row "$submission_id" "pipeline_job_id=$job_id" status=SUBMITTED slurm_state=PENDING; local s attempts; for s in "${samples[@]}"; do attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=PIPELINE_SUBMITTED" "slurm_job_id=$job_id" "wave_id=$submission_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=task-native submission; phase=$phase"; done; }
 with_state_lock finalize
+WORK_DISK_USED_PERCENT_OVERRIDE="$work_used" "${SCRIPT_DIR}/control_streaming_array_admission.sh" "$cfg"
 log "Submitted $submission_id (${#samples[@]} samples, $required tasks) as Slurm array $job_id"

@@ -36,6 +36,7 @@ elapsed=$(( $(date +%s) - start ))
 assert test "$elapsed" -lt 10
 assert test "$(cat "$T/probes")" -eq 2
 assert test "$(cat "$T/cycles")" -eq 2
+assert test "$(cat "$T/admission")" = $'50\n90'
 assert grep -qx 90 "$T/admission"
 assert grep -q 'Critical work disk pressure detected by lightweight probe' "$T/daemon.log"
 echo 'Manager daemon lightweight disk-probe tests passed.'

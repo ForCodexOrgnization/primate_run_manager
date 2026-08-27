@@ -76,8 +76,8 @@ submit_replacement() {
 }
 trap on_walltime USR1
 
-# Normal cadence is split into cheap df-only waits.  No state scan or manager
-# reconciliation occurs unless the critical threshold is actually crossed.
+# Normal cadence is split into lightweight disk probes plus exact Slurm
+# admission reconciliation. Full manager state scans remain on the slow cadence.
 normal_pressure_sleep() {
     local remaining=$MANAGER_POLL_SECONDS slice used
     while (( remaining > 0 && stop_requested == 0 )); do
@@ -90,9 +90,11 @@ normal_pressure_sleep() {
         remaining=$((remaining - slice))
         used=$(df -P "${WORK_DISK_CHECK_PATH:-$PIPELINE_WORK_ROOT}" | awk 'NR==2{gsub(/%/,"",$5); print $5}')
         [[ "$used" =~ ^[0-9]+$ ]] || { printf '[%s] WARNING: work disk pressure probe returned an invalid value.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >&2; continue; }
+        # Reconcile global concurrency and resume priority on every lightweight
+        # cadence, even when disk use is healthy. This does not run a state scan.
+        WORK_DISK_USED_PERCENT_OVERRIDE="$used" "$REPOSITORY_ROOT/bin/control_streaming_array_admission.sh" "$CONFIG_FILE"
         if (( used >= WORK_CRITICAL_PERCENT )); then
-            printf '[%s] Critical work disk pressure detected by lightweight probe (%s%%); holding pending array elements now.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$used"
-            WORK_DISK_USED_PERCENT_OVERRIDE="$used" "$REPOSITORY_ROOT/bin/control_streaming_array_admission.sh" "$CONFIG_FILE"
+            printf '[%s] Critical work disk pressure detected by lightweight probe (%s%%); pending array admission is closed.\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$used"
             return 2
         fi
     done

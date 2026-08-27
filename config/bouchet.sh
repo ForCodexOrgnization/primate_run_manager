@@ -19,7 +19,7 @@ NUCLEAR_ONLY_REF_DIR="/home/lt692/scratch_pi_njl27/lt692/primate_mtDNA_analysis/
 # task-native streaming concurrency is controlled by SAMPLE_CHAIN_CONCURRENCY.
 PIPELINE_WAVE_SIZE=50
 SAMPLE_CHAIN_CONCURRENCY=10
-STREAMING_SUBMISSION_WINDOW=200
+STREAMING_SUBMISSION_WINDOW=0
 # For a one-sample manager smoke test, temporarily set PIPELINE_WAVE_SIZE=1,
 # SAMPLE_CHAIN_CONCURRENCY=1, STREAM_SMOKE_TEST=1, and ENABLE_PIPELINE_SUBMIT=1.
 # Restore these reviewed production values after the test.

@@ -17,7 +17,8 @@ printf 'Pending samples: %s\nReady to transfer: %s\nDeferred retry: %s\nDeferred
 active=$(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/{print $1;exit}' "$WAVE_STATUS_FILE"); printf 'Active submission: %s\n' "${active:-none}"
 job=""; [[ -z "$active" ]] || job=$(wave_field "$active" pipeline_job_id); printf 'Slurm array job ID: %s\n' "${job:-none}"
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
- printf 'Sample concurrency: %s\n' "$SAMPLE_CHAIN_CONCURRENCY"
+ printf 'Streaming submission window: %s\n' "$([[ $STREAMING_SUBMISSION_WINDOW == 0 ]] && echo unlimited || echo $STREAMING_SUBMISSION_WINDOW)"
+ printf 'Global sample concurrency target: %s\n' "$SAMPLE_CHAIN_CONCURRENCY"
  hold_file="${MANAGER_ROOT}/state/streaming_array_disk_holds.tsv"
  held=0; [[ ! -s "$hold_file" ]] || held=$(awk 'END{print (NR > 0 ? NR - 1 : 0)}' "$hold_file")
  printf 'Disk pressure array admission: %s\nArray elements held by manager: %s\nArray release threshold: %s%%\n' "$([[ "$held" -gt 0 ]] && echo HELD || echo ACTIVE)" "$held" "$WORK_ARRAY_RELEASE_PERCENT"
@@ -30,6 +31,17 @@ if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
    done < <(jobs=$(awk -F '\t' 'NR>1&&$9~/^(CREATED|SUBMITTED|RUNNING)$/&&$4~/^[0-9]+$/{print $4}' "$WAVE_STATUS_FILE" | sort -u | paste -sd,); [[ -z "$jobs" ]] || squeue --noheader --array --jobs="$jobs" --format='%T|%r' 2>/dev/null)
  fi
  printf 'Actual live Slurm RUNNING: %s\nActual live Slurm PENDING: %s\nActual live Slurm HELD: %s\n' "$live_running" "$live_pending" "$live_held"
+ ledger="$MANAGER_ROOT/state/streaming_array_holds.tsv"
+ resume_priority=0; global_held=0; disk_held=0
+ if [[ -s "$ledger" ]]; then
+   resume_priority=$(awk -F '\t' 'NR>1&&$3=="RESUME_PRIORITY"{n++}END{print n+0}' "$ledger")
+   global_held=$(awk -F '\t' 'NR>1&&$3=="GLOBAL_CONCURRENCY"{n++}END{print n+0}' "$ledger")
+   disk_held=$(awk -F '\t' 'NR>1&&$3=="DISK_PRESSURE"{n++}END{print n+0}' "$ledger")
+ fi
+ admission_status="$MANAGER_ROOT/state/streaming_admission_status.tsv"
+ resume_waiting=0; [[ ! -s "$admission_status" ]] || resume_waiting=$(awk -F '\t' 'NR==2{print $1+0}' "$admission_status")
+ active_count=$(active_submission_count)
+ printf 'Resume candidates waiting: %s\nFresh tasks held for resume priority: %s\nTasks held for global concurrency: %s\nTasks held for disk pressure: %s\nActive streaming submissions: %s\n' "$resume_waiting" "$resume_priority" "$global_held" "$disk_held" "$active_count"
 else
  printf 'Batch size: %s\nBatch concurrency: %s\n' "$PIPELINE_BATCH_SIZE" "$CHAIN_CONCURRENT_BATCHES"
  if [[ -n "$active" && -s "${MANAGER_ROOT}/state/submission_task_map/${active}.tsv" ]]; then printf 'Total batches in active submission: %s\n' "$(awk -F '\t' 'NR>1&&!seen[$5]++{n++}END{print n+0}' "${MANAGER_ROOT}/state/submission_task_map/${active}.tsv")"; fi

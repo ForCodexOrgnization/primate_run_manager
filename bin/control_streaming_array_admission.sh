@@ -31,8 +31,8 @@ fi
 
 jobs=$(awk -F '\t' 'NR>1 && $9~/^(CREATED|SUBMITTED|RUNNING)$/ && $4~/^[0-9]+$/ { print $4 }' \
     "$WAVE_STATUS_FILE" | sort -u | paste -sd,)
-rows=$(mktemp); desired=$(mktemp); previous=$(mktemp)
-trap 'rm -f "$rows" "$desired" "$previous"' EXIT
+rows=$(mktemp); policy=$(mktemp); managed=$(mktemp); desired=$(mktemp); previous=$(mktemp)
+trap 'rm -f "$rows" "$policy" "$managed" "$desired" "$previous"' EXIT
 cp "$ledger" "$previous"
 if [[ -n "$jobs" ]]; then
     squeue --noheader --array --jobs="$jobs" --format='%F|%K|%T|%r' 2>/dev/null |
@@ -77,21 +77,30 @@ done < "$rows"
 admitted=0
 resume_admitted=0
 timestamp=$(now_iso)
-declare -A desired_elements=()
+declare -A policy_elements=() previous_disk=()
+while IFS=$'\t' read -r job task hold_reason _; do
+    [[ "$job" == array_job_id || "$hold_reason" != DISK_PRESSURE ]] || previous_disk["$job|$task"]=1
+done < "$previous"
 for item in "${resumes[@]}" "${fresh[@]}"; do
     [[ -n "$item" ]] || continue
     IFS='|' read -r job task pending_reason <<< "$item"
     candidate_is_resume=0; is_resume "$job" "$task" && candidate_is_resume=1
-    if (( used >= WORK_CRITICAL_PERCENT )); then
-        printf '%s\t%s\tDISK_PRESSURE\t%s\n' "$job" "$task" "$timestamp" >> "$desired"; desired_elements["$job|$task"]=1
-    elif (( admitted < free )); then
+    key="$job|$task"
+    # A manager-owned disk hold remains required throughout the hysteresis
+    # band. The old ledger is deliberately consulted before policy is rebuilt.
+    if (( used >= WORK_CRITICAL_PERCENT )) ||
+       { [[ -n "${previous_disk[$key]:-}" ]] && (( used > WORK_ARRAY_RELEASE_PERCENT )); }; then
+        printf '%s\t%s\tDISK_PRESSURE\t%s\n' "$job" "$task" "$timestamp" >> "$policy"
+        policy_elements["$key"]=1
+    fi
+    if (( admitted < free )); then
         admitted=$((admitted + 1))
         (( candidate_is_resume == 0 )) || resume_admitted=$((resume_admitted + 1))
     else
-        printf '%s\t%s\tGLOBAL_CONCURRENCY\t%s\n' "$job" "$task" "$timestamp" >> "$desired"; desired_elements["$job|$task"]=1
+        printf '%s\t%s\tGLOBAL_CONCURRENCY\t%s\n' "$job" "$task" "$timestamp" >> "$policy"; policy_elements["$key"]=1
         # This reason documents only fresh work displaced by an admitted resume.
         if (( candidate_is_resume == 0 && resume_admitted > 0 )); then
-            printf '%s\t%s\tRESUME_PRIORITY\t%s\n' "$job" "$task" "$timestamp" >> "$desired"
+            printf '%s\t%s\tRESUME_PRIORITY\t%s\n' "$job" "$task" "$timestamp" >> "$policy"
             resume_admitted=$((resume_admitted - 1))
         fi
     fi
@@ -104,12 +113,25 @@ while IFS=$'\t' read -r job task _; do
     [[ "$job" == array_job_id ]] || previous_owned["$job|$task"]=1
 done < "$previous"
 while IFS='|' read -r job task _state reason; do current_reason["$job|$task"]=$reason; done < "$rows"
-for key in "${!desired_elements[@]}"; do
+declare -A desired_elements=()
+for key in "${!policy_elements[@]}"; do
     job=${key%%|*}; task=${key#*|}; reason=${current_reason[$key]:-}
-    [[ "$reason" == JobHeldUser && -n "${previous_owned[$key]:-}" ]] && continue
-    [[ "$reason" == JobHeldUser || "$reason" == JobHeldAdmin ]] && continue
-    scontrol hold "${job}_${task}"
+    if [[ "$reason" == JobHeldAdmin ]]; then
+        # Administrative ownership always supersedes stale manager state.
+        continue
+    elif [[ "$reason" == JobHeldUser && -z "${previous_owned[$key]:-}" ]]; then
+        # Never turn an unrelated scheduler hold into manager ownership.
+        continue
+    elif [[ "$reason" != JobHeldUser ]]; then
+        # The desired physical hold is absent (including for a stale owned row).
+        scontrol hold "${job}_${task}"
+    else
+        : # JobHeldUser plus an existing ledger row proves manager ownership.
+    fi
+    printf '%s|%s\n' "$job" "$task" >> "$managed"
+    desired_elements["$key"]=1
 done
+awk -F '\t' 'FILENAME==ARGV[1] { managed[$1]=1; next } managed[$1 "|" $2]' "$managed" "$policy" > "$desired"
 for key in "${!previous_owned[@]}"; do
     [[ -n "${desired_elements[$key]:-}" ]] && continue
     job=${key%%|*}; task=${key#*|}

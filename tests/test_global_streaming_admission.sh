@@ -22,10 +22,12 @@ printf 2 > "$T/old_running"; printf 0 > "$T/new_running"; : > "$T/released"; : >
 cat > "$T/mockbin/squeue" <<'MOCK'
 #!/usr/bin/env bash
 old=$(cat "$TEST_ROOT/old_running"); new=$(cat "$TEST_ROOT/new_running")
+declare -A is_released=()
+while read -r task; do [[ -z "$task" ]] || is_released[$task]=1; done < "$TEST_ROOT/released"
 for i in $(seq 1 "$old"); do printf '700|%s|RUNNING|None\n' "$i"; done
 for i in $(seq 1 1095); do
   if (( i <= new )); then printf '800|%s|RUNNING|None\n' "$i"
-  elif grep -qx "$i" "$TEST_ROOT/released"; then printf '800|%s|PENDING|Resources\n' "$i"
+  elif [[ -n "${is_released[$i]:-}" ]]; then printf '800|%s|PENDING|Resources\n' "$i"
   else printf '800|%s|PENDING|JobHeldUser\n' "$i"; fi
 done
 MOCK

@@ -58,6 +58,22 @@ assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_disk_hold
 printf held > "$T/queue_mode"
 WORK_DISK_USED_PERCENT_OVERRIDE=95 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert test "$(grep -c '^hold ' "$T/scontrol.log")" -eq 2
+# Manager-owned disk holds persist throughout the configured hysteresis band.
+for used in 89 80 76; do
+  WORK_DISK_USED_PERCENT_OVERRIDE=$used "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+  assert test "$(grep -c '^release ' "$T/scontrol.log" || true)" -eq 0
+  assert test "$(awk -F '\t' '$3=="DISK_PRESSURE"{n++}END{print n+0}' "$T/manager/state/streaming_array_holds.tsv")" -eq 2
+done
+# A second manager reason may clear without releasing the physical disk hold.
+sed -i 's/^SAMPLE_CHAIN_CONCURRENCY=10$/SAMPLE_CHAIN_CONCURRENCY=1/' "$T/config.sh"
+WORK_DISK_USED_PERCENT_OVERRIDE=90 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+assert awk -F '\t' '$1==700&&$2==3&&$3=="DISK_PRESSURE"{d=1}$1==700&&$2==3&&$3=="GLOBAL_CONCURRENCY"{g=1}END{exit !(d&&g)}' "$T/manager/state/streaming_array_holds.tsv"
+sed -i 's/^SAMPLE_CHAIN_CONCURRENCY=1$/SAMPLE_CHAIN_CONCURRENCY=10/' "$T/config.sh"
+WORK_DISK_USED_PERCENT_OVERRIDE=80 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+assert awk -F '\t' '$1==700&&$2==3&&$3=="DISK_PRESSURE"{d=1}$3=="GLOBAL_CONCURRENCY"{g=1}END{exit !d || g}' "$T/manager/state/streaming_array_holds.tsv"
+assert test "$(grep -c '^release ' "$T/scontrol.log" || true)" -eq 0
+WORK_DISK_USED_PERCENT_OVERRIDE=75 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+assert test "$(grep -c '^release ' "$T/scontrol.log")" -eq 2
 # Terminal/cancelled elements disappear from squeue and their records are pruned
 # even while usage remains inside the hysteresis band.
 printf empty > "$T/queue_mode"

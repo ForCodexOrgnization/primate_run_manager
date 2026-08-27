@@ -78,6 +78,19 @@ else
  (( task == required )) || die "launcher batch mapping count $task differs from expected $required"
 fi
 mv "$tmp" "$map"; chmod a-w "$map" 2>/dev/null || true
+# The launcher submitted this streaming array with sbatch --hold. Record exact
+# manager ownership before any release can occur; if reconciliation fails, the
+# safe failure mode is that the new array remains held.
+if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then
+  admission_ledger="$MANAGER_ROOT/state/streaming_array_holds.tsv"
+  exec 6>"$MANAGER_ROOT/state/locks/streaming_admission.lock"; flock -x 6
+  [[ -e "$admission_ledger" ]] || printf 'array_job_id\tarray_task_id\thold_reason\theld_at\n' > "$admission_ledger"
+  while IFS=$'\t' read -r _ _ _ mapped_job mapped_task _rest; do
+    [[ "$mapped_job" == slurm_array_job_id ]] && continue
+    printf '%s\t%s\tINITIAL_SUBMISSION\t%s\n' "$mapped_job" "$mapped_task" "$(now_iso)" >> "$admission_ledger"
+  done < "$map"
+  flock -u 6
+fi
 # Keep the old streaming map readable for safe migration tooling.
 if [[ "$PIPELINE_MODE" == streaming_per_sample ]]; then awk -F '\t' 'BEGIN{OFS="\t";print "submission_id","array_job_id","array_task_id","sample_id","reference_name","sample_work_root","phase"} NR>1{print $1,$4,$5,$8,$9,$10,$3}' "$map" > "${MANAGER_ROOT}/state/array_sample_map/${submission_id}.tsv"; fi
 finalize(){ update_wave_row "$submission_id" "pipeline_job_id=$job_id" status=SUBMITTED slurm_state=PENDING; local s attempts; for s in "${samples[@]}"; do attempts=$(awk -F '\t' -v x="$s" 'NR>1&&$1==x{print $7+1}' "$STATUS_FILE"); update_sample_fields "$s" "status=PIPELINE_SUBMITTED" "slurm_job_id=$job_id" "wave_id=$submission_id" "pipeline_attempts=$attempts" "last_pipeline_error=" "notes=task-native submission; phase=$phase"; done; }

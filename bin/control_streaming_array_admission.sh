@@ -135,7 +135,13 @@ awk -F '\t' 'FILENAME==ARGV[1] { managed[$1]=1; next } managed[$1 "|" $2]' "$man
 for key in "${!previous_owned[@]}"; do
     [[ -n "${desired_elements[$key]:-}" ]] && continue
     job=${key%%|*}; task=${key#*|}
-    [[ "${current_reason[$key]:-}" == JobHeldUser ]] && scontrol release "${job}_${task}" || true
+    if [[ "${current_reason[$key]:-}" == JobHeldUser ]]; then
+        if ! scontrol release "${job}_${task}"; then
+            log "WARNING: release failure for manager-owned array element job=$job task=$task; preserving hold ownership"
+            awk -F '\t' -v j="$job" -v t="$task" \
+                'NR>1 && $1==j && $2==t' "$previous" >> "$desired"
+        fi
+    fi
 done
 
 { printf 'array_job_id\tarray_task_id\thold_reason\theld_at\n'; sort -u "$desired"; } > "$ledger"

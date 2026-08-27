@@ -27,6 +27,10 @@ while IFS=$'\t' read -r sample manager_status; do
   elif ! slurm_state_is_terminal "$state" || [[ ! "$manager_status" =~ ^(PIPELINE_DEFERRED_RETRY|PIPELINE_DEFERRED_FAILED)$ ]]; then
     count[markerless_terminal_not_safe]=$((count[markerless_terminal_not_safe]+1)); continue
   fi
+  requeue_marker="$PIPELINE_WORK_ROOT/.sample_state/$sample.requeue.tsv"
+  if [[ -s "$requeue_marker" ]] && awk -F '\t' -v j="$job" -v t="$task" 'NR==1{for(i=1;i<=NF;i++)h[$i]=i;next}$h["reason"]=="TIMEOUT_SIGNAL"&&$h["resume_eligible"]==1&&$h["array_job_id"]==j&&$h["array_task_id"]==t{ok=1}END{exit !ok}' "$requeue_marker"; then
+    count[active_slurm]=$((count[active_slurm]+1)); continue
+  fi
   marker="$PIPELINE_WORK_ROOT/.sample_state/$sample.failure.tsv"
   archive="$MANAGER_ROOT/state/failure_diagnostics/samples/$sample"
   if [[ -s "$marker" && ! -f "$archive/ARCHIVE_COMPLETE" ]]; then count[missing_archive]=$((count[missing_archive]+1)); continue; fi

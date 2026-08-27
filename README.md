@@ -426,3 +426,9 @@ Each cycle checks and submits already-`READY_TO_TRANSFER` samples before output
 validation, then repeats transfer handling afterward for samples newly proven
 complete. `show_status.sh` reports Globus health, active transfer count, daemon
 and repository code identifiers, and the last manager-cycle result.
+
+## Streaming admission and safe deployment
+
+`STREAMING_SUBMISSION_WINDOW=0` selects every currently eligible, unowned sample. Streaming arrays may overlap, but new arrays are submitted with `STREAMING_SUBMIT_HELD=1`; the unified exact-element controller composes `DISK_PRESSURE`, `GLOBAL_CONCURRENCY`, and `RESUME_PRIORITY` ownership and releases an element only after all manager reasons clear. The pipeline launcher must honor `STREAMING_SUBMIT_HELD=1` by passing Slurm's held-submission option to `sbatch`.
+
+Deploy pipeline graph changes from an immutable commit checkout. Merge and pin the reviewed commit for new submissions; allow existing workers to finish on their original checkout or deliberately stop and restart them at a controlled sample boundary. Never update a checkout underneath a live worker. Existing published CRAM/CRAI files remain authoritative, but monolithic download work directories are not cache-compatible with a per-run workflow graph. Do not delete canonical timeout-resume work roots during migration.

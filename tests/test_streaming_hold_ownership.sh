@@ -91,4 +91,50 @@ assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_holds.tsv
 WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert test "$(grep -c '^release 800_10$' "$T/scontrol.log")" -eq 2
 if grep -Eq '^(hold|release) 800_[12]$' "$T/scontrol.log"; then exit 1; fi
+
+# Ownership is durable as each hold succeeds, rather than only at the end of
+# reconciliation. A later failed hold rolls back only its own staged row.
+sed -i 's/^SAMPLE_CHAIN_CONCURRENCY=10$/SAMPLE_CHAIN_CONCURRENCY=0/' "$T/config.sh"
+cat > "$T/manager/state/streaming_array_holds.tsv" <<'LEDGER'
+array_job_id	array_task_id	hold_reason	held_at
+LEDGER
+cat > "$T/mockbin/squeue" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -e "$TEST_ROOT/task20_held" ]]; then
+  printf '800|20|PENDING|JobHeldUser\n'
+else
+  printf '800|20|PENDING|Resources\n'
+fi
+printf '800|21|PENDING|Resources\n'
+MOCK
+cat > "$T/mockbin/scontrol" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TEST_ROOT/scontrol.log"
+case "$1 $2" in
+  'hold 800_20') touch "$TEST_ROOT/task20_held" ;;
+  'hold 800_21') exit 1 ;;
+  'release 800_20') touch "$TEST_ROOT/task20_released" ;;
+esac
+MOCK
+chmod +x "$T/mockbin/squeue" "$T/mockbin/scontrol"
+
+if WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null 2>"$T/hold.err"; then
+  echo 'expected the second hold to fail' >&2
+  exit 1
+fi
+assert grep -q 'hold failure for manager array element job=800 task=21' "$T/hold.err"
+assert grep -q $'^800\t20\tGLOBAL_CONCURRENCY\t' "$T/manager/state/streaming_array_holds.tsv"
+if grep -q $'^800\t21\t' "$T/manager/state/streaming_array_holds.tsv"; then exit 1; fi
+
+# The next reconciliation recognizes the durable row and releases it normally
+# once policy allows the task to run.
+sed -i 's/^SAMPLE_CHAIN_CONCURRENCY=0$/SAMPLE_CHAIN_CONCURRENCY=10/' "$T/config.sh"
+cat > "$T/mockbin/squeue" <<'MOCK'
+#!/usr/bin/env bash
+[[ -e "$TEST_ROOT/task20_released" ]] || printf '800|20|PENDING|JobHeldUser\n'
+MOCK
+chmod +x "$T/mockbin/squeue"
+WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+assert grep -qx 'release 800_20' "$T/scontrol.log"
+assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_holds.tsv")" -eq 0
 echo 'Streaming hold ownership regression tests passed.'

@@ -18,6 +18,13 @@ exec 7>"$MANAGER_ROOT/state/locks/streaming_admission.lock"
 flock -x 7
 [[ -e "$ledger" ]] || printf 'array_job_id\tarray_task_id\thold_reason\theld_at\n' > "$ledger"
 
+replace_ledger_from_body() {
+    local body=$1 replacement
+    replacement=$(mktemp "${ledger}.XXXXXX")
+    { printf 'array_job_id\tarray_task_id\thold_reason\theld_at\n'; sort -u "$body"; } > "$replacement"
+    mv -f "$replacement" "$ledger"
+}
+
 # Adopt manager-owned disk holds written by the previous release. Other
 # JobHeldUser/JobHeldAdmin elements are never claimed merely because they exist.
 if [[ -s "$legacy" ]]; then
@@ -114,7 +121,7 @@ while IFS=$'\t' read -r job task _; do
 done < "$previous"
 while IFS='|' read -r job task _state reason; do current_reason["$job|$task"]=$reason; done < "$rows"
 declare -A desired_elements=()
-for key in "${!policy_elements[@]}"; do
+while IFS= read -r key; do
     job=${key%%|*}; task=${key#*|}; reason=${current_reason[$key]:-}
     if [[ "$reason" == JobHeldAdmin ]]; then
         # Administrative ownership always supersedes stale manager state.
@@ -123,14 +130,30 @@ for key in "${!policy_elements[@]}"; do
         # Never turn an unrelated scheduler hold into manager ownership.
         continue
     elif [[ "$reason" != JobHeldUser ]]; then
-        # The desired physical hold is absent (including for a stale owned row).
-        scontrol hold "${job}_${task}"
+        # Write ownership before creating the physical hold. This closes the
+        # orphan-hold window if this or a later scheduler operation fails.
+        ownership_before=$(mktemp "${ledger}.before.XXXXXX")
+        staged_ownership=$(mktemp)
+        cp "$ledger" "$ownership_before"
+        awk 'NR>1' "$ledger" > "$staged_ownership"
+        awk -F '\t' -v j="$job" -v t="$task" '$1==j && $2==t' "$policy" >> "$staged_ownership"
+        replace_ledger_from_body "$staged_ownership"
+        rm -f "$staged_ownership"
+        if scontrol hold "${job}_${task}"; then
+            rm -f "$ownership_before"
+        else
+            # Restore precisely the ownership state from before this attempt;
+            # rows made durable by earlier successful holds remain intact.
+            mv -f "$ownership_before" "$ledger"
+            log "ERROR: hold failure for manager array element job=$job task=$task; rolled back staged ownership"
+            exit 1
+        fi
     else
         : # JobHeldUser plus an existing ledger row proves manager ownership.
     fi
     printf '%s|%s\n' "$job" "$task" >> "$managed"
     desired_elements["$key"]=1
-done
+done < <(awk -F '\t' '!seen[$1 FS $2]++ { print $1 "|" $2 }' "$policy")
 awk -F '\t' 'FILENAME==ARGV[1] { managed[$1]=1; next } managed[$1 "|" $2]' "$managed" "$policy" > "$desired"
 for key in "${!previous_owned[@]}"; do
     [[ -n "${desired_elements[$key]:-}" ]] && continue
@@ -144,7 +167,7 @@ for key in "${!previous_owned[@]}"; do
     fi
 done
 
-{ printf 'array_job_id\tarray_task_id\thold_reason\theld_at\n'; sort -u "$desired"; } > "$ledger"
+replace_ledger_from_body "$desired"
 { printf 'array_job_id\tarray_task_id\theld_at\thold_reason\n'; awk -F '\t' '$3=="DISK_PRESSURE" { print $1 FS $2 FS $4 FS "critical work filesystem" }' "$ledger"; } > "$legacy"
 pending=$(awk -F '|' '$3=="PENDING" { n++ } END { print n+0 }' "$rows")
 held=$(awk -F '|' '$3=="PENDING" && ($4=="JobHeldUser" || $4=="JobHeldAdmin") { n++ } END { print n+0 }' "$rows")

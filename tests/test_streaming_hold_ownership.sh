@@ -52,4 +52,43 @@ assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_holds.tsv
 WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
 assert test "$(grep -c '^release ' "$T/scontrol.log")" -eq 2
 if grep -Eq '^(hold|release) 900_[12]$' "$T/scontrol.log"; then exit 1; fi
+
+# A transient release failure preserves every ownership reason and is retried.
+printf 'owners\tm\t1\t800\tnow\tPENDING\t0\t1\tSUBMITTED\tnow\townership\t%s\t\towners\t\t0\tx\tx\tx\t\tx\tPER_SAMPLE\n' "$T/work" >> "$T/manager/state/wave_status.tsv"
+cat > "$T/manager/state/streaming_array_holds.tsv" <<'LEDGER'
+array_job_id	array_task_id	hold_reason	held_at
+800	10	INITIAL_SUBMISSION	initial
+800	10	GLOBAL_CONCURRENCY	concurrency
+LEDGER
+cat > "$T/mockbin/squeue" <<'MOCK'
+#!/usr/bin/env bash
+printf '800|1|PENDING|JobHeldUser\n'  # unrelated manual user hold
+printf '800|2|PENDING|JobHeldAdmin\n' # administrator hold
+[[ -e "$TEST_ROOT/task10_released" ]] || printf '800|10|PENDING|JobHeldUser\n'
+MOCK
+cat > "$T/mockbin/scontrol" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TEST_ROOT/scontrol.log"
+if [[ "$1 $2" == 'release 800_10' ]]; then
+  attempts=$(grep -c '^release 800_10$' "$TEST_ROOT/scontrol.log")
+  (( attempts > 1 )) || exit 1
+  touch "$TEST_ROOT/task10_released"
+fi
+MOCK
+chmod +x "$T/mockbin/squeue" "$T/mockbin/scontrol"
+
+WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null 2>"$T/release.err"
+assert grep -q 'release failure for manager-owned array element job=800 task=10' "$T/release.err"
+assert test "$(grep -c $'^800\t10\t' "$T/manager/state/streaming_array_holds.tsv")" -eq 2
+assert grep -q $'^800\t10\tINITIAL_SUBMISSION\tinitial$' "$T/manager/state/streaming_array_holds.tsv"
+assert grep -q $'^800\t10\tGLOBAL_CONCURRENCY\tconcurrency$' "$T/manager/state/streaming_array_holds.tsv"
+
+WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+assert test "$(grep -c '^release 800_10$' "$T/scontrol.log")" -eq 2
+assert test "$(awk 'END{print NR-1}' "$T/manager/state/streaming_array_holds.tsv")" -eq 0
+
+# A successful release is not repeated, and external/admin holds remain untouched.
+WORK_DISK_USED_PERCENT_OVERRIDE=50 "$REPO/bin/control_streaming_array_admission.sh" "$T/config.sh" >/dev/null
+assert test "$(grep -c '^release 800_10$' "$T/scontrol.log")" -eq 2
+if grep -Eq '^(hold|release) 800_[12]$' "$T/scontrol.log"; then exit 1; fi
 echo 'Streaming hold ownership regression tests passed.'
